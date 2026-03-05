@@ -188,40 +188,69 @@ impl Expression {
     }
 
     /// Calculates the maximum contiguous vector width for the innermost dimension.
-    /// This is determined by the largest power-of-two stride-1 prefix.
+    /// This is determined structurally by finding the largest power-of-two stride-1 prefix
+    /// in the normalized placement layer.
     pub fn max_vector_width(&self, valuation: &Valuation) -> u64 {
-        let src = self.source();
-        if src.factors.is_empty() { return 1; }
+        // 1. Normalize to get the canonical Placement layer
+        let nf = self.clone().normalize();
         
-        // Inner-most logical dimension index
-        let inner_idx = src.factors.len() - 1;
-        
-        // Lower to symbolic scalar math
-        let mut inputs = Vec::new();
-        for i in 0..src.factors.len() {
-            inputs.push(crate::layout::ScalarExpr::Input(i));
+        // 2. Perform structural stride analysis on the placement layer
+        // We look for the stride of the innermost dimension of the VIEW's target (which is Placement's source)
+        let placement_src = nf.placement.source();
+        if placement_src.factors.is_empty() { return 1; }
+        let inner_idx = placement_src.factors.len() - 1;
+
+        match nf.placement.get_stride(inner_idx, valuation) {
+            Some(1) => {
+                // If stride is 1, the entire extent of this factor is contiguous.
+                // In a production compiler, we would also check if higher dimensions
+                // are contiguous to find even larger widths.
+                valuation.get(&placement_src.factors[inner_idx].extent).unwrap_or(1)
+            }
+            _ => 1, // Stride > 1 or non-linear mapping
         }
-        
-        let lowered = self.lower(valuation, inputs);
-        if lowered.is_empty() { return 1; }
-        
-        // We look at the first target dimension (usually the storage offset)
-        let expr = &lowered[0];
-        
-        // Analysis: Does the inner_idx have a coefficient of 1 and no complex ops?
-        // In a full implementation, we'd do a partial derivative or pattern match.
-        // Here we simulate it by checking if eval(..., inner=1) - eval(..., inner=0) == 1
-        let mut coords0 = vec![0; src.factors.len()];
-        let mut coords1 = vec![0; src.factors.len()];
-        coords1[inner_idx] = 1;
-        
-        let diff = expr.eval(&coords1) - expr.eval(&coords0);
-        if diff == 1 {
-            // Contiguous! The width is the extent of this factor.
-            valuation.get(&src.factors[inner_idx].extent).unwrap_or(1)
-        } else {
-            // Not contiguous (stride > 1)
-            1
+    }
+}
+
+impl Expression {
+    /// Structurally determines the stride of a source dimension.
+    /// Returns None if the mapping is non-linear (contains Div/Mod/Xor).
+    pub fn get_stride(&self, dim_idx: usize, valuation: &Valuation) -> Option<u64> {
+        match self {
+            Expression::Identity(_) => Some(1),
+            Expression::Linearize(s) => {
+                // In row-major Lin(f0, f1, ..., fn), stride of fi is product of extents(i+1..n)
+                let mut stride = 1;
+                for i in (dim_idx + 1)..s.factors.len() {
+                    stride *= valuation.get(&s.factors[i].extent)?;
+                }
+                Some(stride)
+            }
+            Expression::Delinearize(_) => None, // Delinearize contains Div/Mod, not a simple stride
+            Expression::Permute(s, p) => {
+                // Permute itself doesn't have a stride, it reorders. 
+                // This shouldn't be in the placement layer after full normalization,
+                // but if it is, we'd need to track the index.
+                None 
+            }
+            Expression::Product(l1, l2) => {
+                let n1 = l1.source().factors.len();
+                if dim_idx < n1 {
+                    // Stride in l1 * volume of l2's target
+                    let s1 = l1.get_stride(dim_idx, valuation)?;
+                    let v2 = valuation.get(&l2.target().volume_extent())?;
+                    Some(s1 * v2)
+                } else {
+                    l2.get_stride(dim_idx - n1, valuation)
+                }
+            }
+            Expression::Composition(l1, l2) => {
+                // chain rule: stride(l2 o l1) = stride(l1) * stride(l2 at l1's output)
+                // This requires tracking which output dimension l1's input maps to.
+                // For unit-stride checks in Placement, we look for simple Linearize.
+                None
+            }
+            _ => None,
         }
     }
 }

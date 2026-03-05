@@ -35,7 +35,9 @@ impl Expression {
         match self {
             Expression::Identity(_) | Expression::Linearize(_) | Expression::Delinearize(_) |
             Expression::Permute(_, _) | Expression::Reshape(_, _) | Expression::Slice(_, _) |
-            Expression::Pad(_, _, _) | Expression::Flip(_, _) | Expression::BinaryShadow(_, _) => Judgment::True,
+            Expression::Pad(_, _, _) | Expression::Flip(_, _) | Expression::BinaryShadow(_, _) |
+            Expression::Split(_, _, _) | Expression::Join(_, _) | Expression::Squeeze(_, _) |
+            Expression::Unsqueeze(_, _, _) => Judgment::True,
             Expression::Composition(l1, l2) => match (l1.is_injective(), l2.is_injective()) {
                 (Judgment::True, Judgment::True) => Judgment::True,
                 (Judgment::False, _) | (_, Judgment::False) => Judgment::False,
@@ -46,7 +48,7 @@ impl Expression {
                 (Judgment::False, _) | (_, Judgment::False) => Judgment::False,
                 _ => Judgment::Unknown,
             },
-            Expression::Broadcast(_, _) => Judgment::False,
+            Expression::Broadcast(_, _) | Expression::Repeat(_, _) => Judgment::False,
         }
     }
 
@@ -54,7 +56,9 @@ impl Expression {
         match self {
             Expression::Identity(_) | Expression::Linearize(_) | Expression::Delinearize(_) |
             Expression::Permute(_, _) | Expression::Reshape(_, _) | Expression::Broadcast(_, _) |
-            Expression::Flip(_, _) | Expression::BinaryShadow(_, _) => Judgment::True,
+            Expression::Flip(_, _) | Expression::BinaryShadow(_, _) | Expression::Split(_, _, _) |
+            Expression::Join(_, _) | Expression::Squeeze(_, _) | Expression::Unsqueeze(_, _, _) |
+            Expression::Repeat(_, _) => Judgment::True,
             Expression::Composition(l1, l2) => match (l1.is_surjective(), l2.is_surjective()) {
                 (Judgment::True, Judgment::True) => Judgment::True,
                 (Judgment::False, _) | (_, Judgment::False) => Judgment::False,
@@ -81,7 +85,7 @@ impl Expression {
                     _ => Judgment::Unknown,
                 }
             }
-            Expression::Broadcast(_, _) => Judgment::True,
+            Expression::Broadcast(_, _) | Expression::Repeat(_, _) => Judgment::True,
             _ => {
                 match self.is_injective() {
                     Judgment::True => Judgment::False,
@@ -119,6 +123,15 @@ impl Expression {
                         }
                         Expression::BinaryShadow(s1, m_final)
                     }
+                    // Exchange Rule: Permute o Linearize -> Linearize
+                    // Lin_A o Perm_p = Lin_{Perm_p(A)}
+                    (Expression::Permute(s, p), Expression::Linearize(target)) => {
+                        if s.permute(&p).compatible(&target) {
+                             Expression::Linearize(s)
+                        } else {
+                             Expression::Composition(Box::new(Expression::Permute(s, p)), Box::new(Expression::Linearize(target)))
+                        }
+                    }
                     (l1, l2) => Expression::Composition(Box::new(l1), Box::new(l2)),
                 }
             }
@@ -135,7 +148,8 @@ impl Expression {
         match self {
             Expression::Identity(_) | Expression::Slice(_, _) | Expression::Broadcast(_, _) | 
             Expression::Permute(_, _) | Expression::Reshape(_, _) | Expression::Pad(_, _, _) |
-            Expression::Flip(_, _) => "View",
+            Expression::Flip(_, _) | Expression::Split(_, _, _) | Expression::Join(_, _) |
+            Expression::Squeeze(_, _) | Expression::Unsqueeze(_, _, _) | Expression::Repeat(_, _) => "View",
             Expression::Linearize(_) | Expression::Delinearize(_) => "Placement",
             Expression::BinaryShadow(_, _) => "Shadow",
             Expression::Composition(_, _) | Expression::Product(_, _) => "Complex",

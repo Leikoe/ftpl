@@ -110,6 +110,14 @@ impl Space {
         }
         true
     }
+
+    pub fn permute(&self, p: &[usize]) -> Space {
+        let mut factors = vec![Factor::new(Kind::Logical, Extent::Constant(0), None); self.factors.len()];
+        for (i, &pos) in p.iter().enumerate() {
+            factors[pos] = self.factors[i].clone();
+        }
+        Space::new(factors)
+    }
 }
 
 /// A valuation `ν |= Γ` assigns concrete natural numbers to symbolic variables.

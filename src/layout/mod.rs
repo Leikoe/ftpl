@@ -88,6 +88,12 @@ pub enum Expression {
     Broadcast(Space, Space),
     Pad(Space, Space, Vec<(u64, u64)>),
     Flip(Space, Vec<bool>),
+    // New Generators
+    Split(Space, usize, u64), // Space, factor index to split, split point (extent of first part)
+    Join(Space, usize),      // Space, index of first of two adjacent factors to join
+    Squeeze(Space, usize),   // Space, index of factor with extent 1 to remove
+    Unsqueeze(Space, usize, Factor), // Space, index to insert new factor, the new factor (extent must be 1)
+    Repeat(Space, Space),    // source, target (larger, mapping multiple points to same)
 }
 
 impl Layout for Expression {
@@ -95,7 +101,9 @@ impl Layout for Expression {
         match self {
             Expression::Identity(s) | Expression::Linearize(s) | Expression::Permute(s, _) |
             Expression::Reshape(s, _) | Expression::BinaryShadow(s, _) | Expression::Slice(s, _) |
-            Expression::Broadcast(s, _) | Expression::Pad(s, _, _) | Expression::Flip(s, _) => s.clone(),
+            Expression::Broadcast(s, _) | Expression::Pad(s, _, _) | Expression::Flip(s, _) |
+            Expression::Split(s, _, _) | Expression::Join(s, _) | Expression::Squeeze(s, _) |
+            Expression::Unsqueeze(s, _, _) | Expression::Repeat(s, _) => s.clone(),
             Expression::Delinearize(target) => {
                 Space::new(vec![Factor::new(Kind::Other("Offset".to_string()), target.volume_extent(), None)])
             }
@@ -106,7 +114,8 @@ impl Layout for Expression {
 
     fn target(&self) -> Space {
         match self {
-            Expression::Identity(s) | Expression::Delinearize(s) | Expression::Flip(s, _) => s.clone(),
+            Expression::Identity(s) | Expression::Delinearize(s) | Expression::Flip(s, _) |
+            Expression::BinaryShadow(s, _) | Expression::Repeat(_, s) => s.clone(),
             Expression::Linearize(s) => {
                 Space::new(vec![Factor::new(Kind::Other("Offset".to_string()), s.volume_extent(), None)])
             }
@@ -128,7 +137,34 @@ impl Layout for Expression {
                 }
                 Space::new(factors)
             }
-            Expression::BinaryShadow(s, _) => s.clone(),
+            Expression::Split(s, idx, n1) => {
+                let mut factors = s.factors.clone();
+                let f = factors.remove(*idx);
+                // We assume symbolic extents can be divided or we use Constants here
+                // For simplicity, let's use the provided n1.
+                let n_total = if let Extent::Constant(v) = f.extent { v } else { 1 }; // Toy handling of symbolic split
+                factors.insert(*idx, Factor::new(f.kind.clone(), Extent::Constant(*n1), f.tag.0.clone()));
+                factors.insert(idx + 1, Factor::new(f.kind.clone(), Extent::Constant(n_total / *n1), f.tag.0.clone()));
+                Space::new(factors)
+            }
+            Expression::Join(s, idx) => {
+                let mut factors = s.factors.clone();
+                let f1 = factors.remove(*idx);
+                let f2 = factors.remove(*idx);
+                let new_extent = Extent::Product(vec![f1.extent, f2.extent]);
+                factors.insert(*idx, Factor::new(f1.kind, new_extent, f1.tag.0));
+                Space::new(factors)
+            }
+            Expression::Squeeze(s, idx) => {
+                let mut factors = s.factors.clone();
+                factors.remove(*idx);
+                Space::new(factors)
+            }
+            Expression::Unsqueeze(s, idx, f) => {
+                let mut factors = s.factors.clone();
+                factors.insert(*idx, f.clone());
+                Space::new(factors)
+            }
         }
     }
 
@@ -242,6 +278,49 @@ impl Layout for Expression {
                 }
                 Some(output)
             }
+            Expression::Split(s, idx, n1) => {
+                if !s.is_valid(valuation, input) { return None; }
+                let mut output = input.to_vec();
+                let val = output.remove(*idx);
+                output.insert(*idx, val / *n1);
+                output.insert(*idx + 1, val % *n1);
+                Some(output)
+            }
+            Expression::Join(s, idx) => {
+                if !s.is_valid(valuation, input) { return None; }
+                let mut output = input.to_vec();
+                let v1 = output.remove(*idx);
+                let v2 = output.remove(*idx);
+                let n2 = valuation.get(&s.factors[*idx + 1].extent)?;
+                output.insert(*idx, v1 * n2 + v2);
+                Some(output)
+            }
+            Expression::Squeeze(s, idx) => {
+                if !s.is_valid(valuation, input) { return None; }
+                let mut output = input.to_vec();
+                output.remove(*idx);
+                Some(output)
+            }
+            Expression::Unsqueeze(s, idx, _) => {
+                if !s.is_valid(valuation, input) { return None; }
+                let mut output = input.to_vec();
+                output.insert(*idx, 0);
+                Some(output)
+            }
+            Expression::Repeat(s, target) => {
+                if !s.is_valid(valuation, input) { return None; }
+                let mut output = Vec::new();
+                for (i, &c) in input.iter().enumerate() {
+                    let se = valuation.get(&s.factors[i].extent)?;
+                    let te = valuation.get(&target.factors[i].extent)?;
+                    if te < se {
+                        output.push(c % te);
+                    } else {
+                        output.push(c);
+                    }
+                }
+                Some(output)
+            }
         }
     }
 }
@@ -285,6 +364,47 @@ impl Expression {
             Expression::Reshape(s, t) => {
                 let linearized = Expression::Linearize(s.clone()).lower(valuation, inputs);
                 Expression::Delinearize(t.clone()).lower(valuation, linearized)
+            }
+            Expression::Split(_, idx, n1) => {
+                let mut output = inputs;
+                let val = output.remove(*idx);
+                output.insert(*idx, ScalarExpr::Div(Box::new(val.clone()), Box::new(ScalarExpr::Constant(*n1))).simplify());
+                output.insert(*idx + 1, ScalarExpr::Mod(Box::new(val), Box::new(ScalarExpr::Constant(*n1))).simplify());
+                output
+            }
+            Expression::Join(s, idx) => {
+                let mut output = inputs;
+                let v1 = output.remove(*idx);
+                let v2 = output.remove(*idx);
+                let n2 = valuation.get(&s.factors[*idx + 1].extent).unwrap_or(1);
+                output.insert(*idx, ScalarExpr::Add(
+                    Box::new(ScalarExpr::Mul(Box::new(v1), Box::new(ScalarExpr::Constant(n2)))),
+                    Box::new(v2)
+                ).simplify());
+                output
+            }
+            Expression::Squeeze(_, idx) => {
+                let mut output = inputs;
+                output.remove(*idx);
+                output
+            }
+            Expression::Unsqueeze(_, idx, _) => {
+                let mut output = inputs;
+                output.insert(*idx, ScalarExpr::Constant(0));
+                output
+            }
+            Expression::Repeat(s, target) => {
+                let mut output = Vec::new();
+                for (i, expr) in inputs.into_iter().enumerate() {
+                    let se = valuation.get(&s.factors[i].extent).unwrap_or(1);
+                    let te = valuation.get(&target.factors[i].extent).unwrap_or(1);
+                    if te < se {
+                        output.push(ScalarExpr::Mod(Box::new(expr), Box::new(ScalarExpr::Constant(te))).simplify());
+                    } else {
+                        output.push(expr);
+                    }
+                }
+                output
             }
             Expression::Composition(l1, l2) => {
                 let mid = l1.lower(valuation, inputs);

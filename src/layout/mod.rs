@@ -333,4 +333,36 @@ mod tests {
         assert_eq!(reshape.apply(&valuation, &[0, 0]).unwrap(), vec![0]);
         assert_eq!(reshape.apply(&valuation, &[1, 2]).unwrap(), vec![5]);
     }
+
+    #[test]
+    fn test_binary_shadow() {
+        let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(4), None)]);
+        let matrix = vec![vec![0, 1], vec![1, 0]];
+        let shadow = Expression::BinaryShadow(s, matrix);
+        let valuation = Valuation::new();
+        assert_eq!(shadow.apply(&valuation, &[1]).unwrap(), vec![2]);
+        assert_eq!(shadow.apply(&valuation, &[2]).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn test_broadcast() {
+        let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let t = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(1), None)]);
+        let broadcast = Expression::Broadcast(s, t);
+        let valuation = Valuation::new();
+        assert_eq!(broadcast.apply(&valuation, &[5]).unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn test_lowering_complex() {
+        let s = Space::new(vec![
+            Factor::new(Kind::Logical, Extent::Constant(2), None),
+            Factor::new(Kind::Logical, Extent::Constant(3), None),
+        ]);
+        let lin = Expression::Linearize(s);
+        let valuation = Valuation::new();
+        let inputs = vec![ScalarExpr::Input(0), ScalarExpr::Input(1)];
+        let lowered = lin.lower(&valuation, inputs);
+        assert_eq!(lowered[0].eval(&[1, 2]), 5);
+    }
 }

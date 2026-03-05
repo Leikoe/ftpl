@@ -204,4 +204,37 @@ mod tests {
         let l = Expression::Product(Box::new(t.clone()), Box::new(r.clone()));
         assert_eq!(l.left_div(t).unwrap(), r);
     }
+
+    #[test]
+    fn test_structural_judgments() {
+        let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let id = Expression::Identity(s.clone());
+        let broadcast = Expression::Broadcast(s.clone(), Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(1), None)]));
+        let valuation = Valuation::new();
+        assert_eq!(id.is_injective(), Judgment::True);
+        assert_eq!(broadcast.is_injective(), Judgment::False);
+        assert_eq!(broadcast.is_aliasing(&valuation), Judgment::True);
+    }
+
+    #[test]
+    fn test_normalization_cancellation() {
+        let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let lin = Expression::Linearize(s.clone());
+        let delin = Expression::Delinearize(s.clone());
+        let comp = Expression::Composition(Box::new(lin), Box::new(delin));
+        
+        let nf = comp.normalize();
+        // lin o delin should simplify to identity in normalization
+        assert_eq!(nf.placement, Expression::Identity(s));
+    }
+
+    #[test]
+    fn test_tensor_core_fit_analysis() {
+        let frag = Space::new(vec![Factor::new(Kind::Fragment, Extent::Constant(16), None)]);
+        let instr = Expression::Linearize(frag.clone());
+        let tile = Space::new(vec![Factor::new(Kind::Tile, Extent::Constant(2), None)]);
+        let program = Expression::Product(Box::new(instr.clone()), Box::new(Expression::Identity(tile.clone())));
+        
+        assert!(program.left_div(instr).is_some());
+    }
 }

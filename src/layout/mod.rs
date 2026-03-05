@@ -365,4 +365,83 @@ mod tests {
         let lowered = lin.lower(&valuation, inputs);
         assert_eq!(lowered[0].eval(&[1, 2]), 5);
     }
+
+    #[test]
+    fn test_permute_mapping() {
+        let s = Space::new(vec![
+            Factor::new(Kind::Logical, Extent::Constant(2), None),
+            Factor::new(Kind::Logical, Extent::Constant(3), None),
+        ]);
+        let p = Expression::Permute(s, vec![1, 0]);
+        let val = Valuation::new();
+        assert_eq!(p.apply(&val, &[1, 2]).unwrap(), vec![2, 1]);
+    }
+
+    #[test]
+    fn test_slice_mapping() {
+        let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let slice = Expression::Slice(s, vec![(2, 5)]); // [2, 5)
+        let val = Valuation::new();
+        assert_eq!(slice.apply(&val, &[2]).unwrap(), vec![0]);
+        assert_eq!(slice.apply(&val, &[4]).unwrap(), vec![2]);
+        assert!(slice.apply(&val, &[5]).is_none());
+    }
+
+    #[test]
+    fn test_pad_mapping() {
+        let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let t = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(12), None)]);
+        let pad = Expression::Pad(s, t, vec![(1, 1)]);
+        let val = Valuation::new();
+        assert_eq!(pad.apply(&val, &[0]).unwrap(), vec![1]);
+        assert_eq!(pad.apply(&val, &[9]).unwrap(), vec![10]);
+    }
+
+    #[test]
+    fn test_flip_mapping() {
+        let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let flip = Expression::Flip(s, vec![true]);
+        let val = Valuation::new();
+        assert_eq!(flip.apply(&val, &[0]).unwrap(), vec![9]);
+        assert_eq!(flip.apply(&val, &[9]).unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn test_linearize_delinearize_inverse() {
+        let s = Space::new(vec![
+            Factor::new(Kind::Logical, Extent::Constant(2), None),
+            Factor::new(Kind::Logical, Extent::Constant(3), None),
+        ]);
+        let lin = Expression::Linearize(s.clone());
+        let delin = Expression::Delinearize(s);
+        let val = Valuation::new();
+        
+        let coord = vec![1, 2];
+        let offset = lin.apply(&val, &coord).unwrap();
+        let back = delin.apply(&val, &offset).unwrap();
+        assert_eq!(coord, back);
+    }
+
+    #[test]
+    fn test_layout_product() {
+        let l1 = Expression::Identity(Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(2), None)]));
+        let l2 = Expression::Identity(Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(3), None)]));
+        let prod = Expression::Product(Box::new(l1), Box::new(l2));
+        let val = Valuation::new();
+        assert_eq!(prod.apply(&val, &[1, 2]).unwrap(), vec![1, 2]);
+    }
+
+    #[test]
+    fn test_scalar_expr_simplification() {
+        // (x * 1) + 0 -> x
+        let expr = ScalarExpr::Add(
+            Box::new(ScalarExpr::Mul(Box::new(ScalarExpr::Input(0)), Box::new(ScalarExpr::Constant(1)))),
+            Box::new(ScalarExpr::Constant(0))
+        ).simplify();
+        assert_eq!(expr, ScalarExpr::Input(0));
+
+        // x / 4 -> x >> 2
+        let div = ScalarExpr::Div(Box::new(ScalarExpr::Input(0)), Box::new(ScalarExpr::Constant(4))).simplify();
+        assert_eq!(div, ScalarExpr::BitShiftRight(Box::new(ScalarExpr::Input(0)), 2));
+    }
 }

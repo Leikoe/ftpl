@@ -141,4 +141,40 @@ mod tests {
         let e3 = Extent::Product(vec![Extent::Variable("N".to_string()), Extent::Variable("M".to_string())]);
         assert_eq!(valuation.get(&e3).unwrap(), 200);
     }
+
+    #[test]
+    fn test_space_product_and_volume() {
+        let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(2), None)]);
+        let s2 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(3), None)]);
+        let s3 = s1.product(&s2);
+        
+        assert_eq!(s3.factors.len(), 2);
+        let mut val = Valuation::new();
+        assert_eq!(val.get(&s3.volume_extent()).unwrap(), 6);
+    }
+
+    #[test]
+    fn test_space_validity() {
+        let s = Space::new(vec![
+            Factor::new(Kind::Logical, Extent::Constant(2), None),
+            Factor::new(Kind::Logical, Extent::Constant(3), None),
+        ]);
+        let val = Valuation::new();
+        
+        assert!(s.is_valid(&val, &[0, 0]));
+        assert!(s.is_valid(&val, &[1, 2]));
+        assert!(!s.is_valid(&val, &[2, 0]));
+        assert!(!s.is_valid(&val, &[0, 3]));
+        assert!(!s.is_valid(&val, &[0])); // Wrong rank
+    }
+
+    #[test]
+    fn test_space_compatibility() {
+        let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let s2 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let s3 = Space::new(vec![Factor::new(Kind::Storage, Extent::Constant(10), None)]);
+        
+        assert!(s1.compatible(&s2));
+        assert!(!s1.compatible(&s3)); // Different kinds
+    }
 }

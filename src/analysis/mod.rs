@@ -186,6 +186,44 @@ impl Expression {
             _ => None,
         }
     }
+
+    /// Calculates the maximum contiguous vector width for the innermost dimension.
+    /// This is determined by the largest power-of-two stride-1 prefix.
+    pub fn max_vector_width(&self, valuation: &Valuation) -> u64 {
+        let src = self.source();
+        if src.factors.is_empty() { return 1; }
+        
+        // Inner-most logical dimension index
+        let inner_idx = src.factors.len() - 1;
+        
+        // Lower to symbolic scalar math
+        let mut inputs = Vec::new();
+        for i in 0..src.factors.len() {
+            inputs.push(crate::layout::ScalarExpr::Input(i));
+        }
+        
+        let lowered = self.lower(valuation, inputs);
+        if lowered.is_empty() { return 1; }
+        
+        // We look at the first target dimension (usually the storage offset)
+        let expr = &lowered[0];
+        
+        // Analysis: Does the inner_idx have a coefficient of 1 and no complex ops?
+        // In a full implementation, we'd do a partial derivative or pattern match.
+        // Here we simulate it by checking if eval(..., inner=1) - eval(..., inner=0) == 1
+        let mut coords0 = vec![0; src.factors.len()];
+        let mut coords1 = vec![0; src.factors.len()];
+        coords1[inner_idx] = 1;
+        
+        let diff = expr.eval(&coords1) - expr.eval(&coords0);
+        if diff == 1 {
+            // Contiguous! The width is the extent of this factor.
+            valuation.get(&src.factors[inner_idx].extent).unwrap_or(1)
+        } else {
+            // Not contiguous (stride > 1)
+            1
+        }
+    }
 }
 
 #[cfg(test)]
@@ -236,5 +274,70 @@ mod tests {
         let program = Expression::Product(Box::new(instr.clone()), Box::new(Expression::Identity(tile.clone())));
         
         assert!(program.left_div(instr).is_some());
+    }
+
+    #[test]
+    fn test_is_surjective() {
+        let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let id = Expression::Identity(s.clone());
+        let slice = Expression::Slice(s.clone(), vec![(0, 5)]);
+        
+        assert_eq!(id.is_surjective(), Judgment::True);
+        assert_eq!(slice.is_surjective(), Judgment::False);
+    }
+
+    #[test]
+    fn test_max_vector_width_cases() {
+        let val = Valuation::new();
+        
+        // Row-major [4, 8] -> 8
+        let s = Space::new(vec![
+            Factor::new(Kind::Logical, Extent::Constant(4), None),
+            Factor::new(Kind::Logical, Extent::Constant(8), None),
+        ]);
+        let lin = Expression::Linearize(s);
+        assert_eq!(lin.max_vector_width(&val), 8);
+
+        // Column-major (Transpose) -> 1
+        let p = Expression::Permute(lin.source(), vec![1, 0]);
+        let col = Expression::Composition(Box::new(p), Box::new(lin));
+        assert_eq!(col.max_vector_width(&val), 1);
+    }
+
+    #[test]
+    fn test_normalization_rules() {
+        let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(4), None)]);
+        let s2 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(4), None)]);
+        let s3 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(4), None)]);
+        
+        // Rule 5: Reshape Fusion
+        let r1 = Expression::Reshape(s1.clone(), s2.clone());
+        let r2 = Expression::Reshape(s2.clone(), s3.clone());
+        let comp = Expression::Composition(Box::new(r1), Box::new(r2));
+        let simplified = comp.simplify_recursive();
+        
+        if let Expression::Reshape(src, tgt) = simplified {
+            assert_eq!(src, s1);
+            assert_eq!(tgt, s3);
+        } else {
+            panic!("Reshape fusion failed");
+        }
+
+        // Rule 6: Permute Fusion
+        let p1 = Expression::Permute(s1.clone(), vec![0]);
+        let p2 = Expression::Permute(s1.clone(), vec![0]);
+        let comp_p = Expression::Composition(Box::new(p1), Box::new(p2));
+        let simplified_p = comp_p.simplify_recursive();
+        assert!(matches!(simplified_p, Expression::Permute(_, _)));
+    }
+
+    #[test]
+    fn test_aliasing_detection() {
+        let val = Valuation::new();
+        let s10 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
+        let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(1), None)]);
+        let broadcast = Expression::Broadcast(s10, s1);
+        
+        assert_eq!(broadcast.is_aliasing(&val), Judgment::True);
     }
 }

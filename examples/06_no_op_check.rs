@@ -32,11 +32,11 @@ fn main() {
     let lowered_orig = l_orig.lower(&valuation, inputs.clone());
     let lowered_final = l_final.lower(&valuation, inputs);
 
-    println!("  Original Address: {:?}", lowered_orig[0]);
-    println!("  Final Address:    {:?}", lowered_final[0].clone().simplify());
+    println!("  Original Address: {:?}", lowered_orig.0[0]);
+    println!("  Final Address:    {:?}", lowered_final.0[0].clone().simplify());
 
     println!("\nCONCLUSION:");
-    if lowered_orig[0] == lowered_final[0].clone().simplify() {
+    if lowered_orig.0[0] == lowered_final.0[0].clone().simplify() {
         println!("  - This is a NO-OP (Identity). It is computationally FREE.");
     } else {
         println!("  - This is NOT an identity. The mapping has changed.");

@@ -48,7 +48,7 @@ fn main() {
     let valuation = Valuation::new();
     let lowered = tiling_expr.lower(&valuation, vec![ScalarExpr::Input(0)]);
     println!("[4] Compiler Tiling Analysis:");
-    println!("    Lowered Address Expr: {:?}", lowered[0]);
+    println!("    Lowered Address Expr: {:?}", lowered.0[0]);
     // Note: The coefficient of the inner dimension is 1, indicating contiguity.
 
     // --- STEP 5: Hardware Primitive Fit (Tensor Core MMA) ---

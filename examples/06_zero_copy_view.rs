@@ -34,7 +34,7 @@ fn main() {
     println!("[FTPL Analysis]");
     println!("  The transformation is composed of 3 stages, but the compiler");
     println!("  fuses them into a single device-side scalar expression.");
-    println!("\n  Final Lowered Expression: {:?}", lowered[0].clone().simplify());
+    println!("\n  Final Lowered Expression: {:?}", lowered.0[0].clone().simplify());
     
     println!("\nCONCLUSION:");
     println!("  Is it 'Free'? Yes and No.");

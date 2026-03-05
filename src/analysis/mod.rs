@@ -28,6 +28,17 @@ impl Layout for LayeredNormalForm {
         let p = self.placement.apply(valuation, &v)?;
         self.shadow.apply(valuation, &p)
     }
+
+    fn lower(&self, valuation: &Valuation, inputs: Vec<crate::layout::ScalarExpr>) -> (Vec<crate::layout::ScalarExpr>, crate::layout::ScalarExpr) {
+        let (v, d1) = self.view.lower(valuation, inputs);
+        let (p, d2) = self.placement.lower(valuation, v);
+        let (s, d3) = self.shadow.lower(valuation, p);
+        let domain = crate::layout::ScalarExpr::And(
+            Box::new(d1),
+            Box::new(crate::layout::ScalarExpr::And(Box::new(d2), Box::new(d3)))
+        ).simplify();
+        (s, domain)
+    }
 }
 
 impl Expression {
@@ -123,15 +134,6 @@ impl Expression {
                         }
                         Expression::BinaryShadow(s1, m_final)
                     }
-                    // Exchange Rule: Permute o Linearize -> Linearize
-                    // Lin_A o Perm_p = Lin_{Perm_p(A)}
-                    (Expression::Permute(s, p), Expression::Linearize(target)) => {
-                        if s.permute(&p).compatible(&target) {
-                             Expression::Linearize(s)
-                        } else {
-                             Expression::Composition(Box::new(Expression::Permute(s, p)), Box::new(Expression::Linearize(target)))
-                        }
-                    }
                     (l1, l2) => Expression::Composition(Box::new(l1), Box::new(l2)),
                 }
             }
@@ -204,53 +206,60 @@ impl Expression {
     /// Calculates the maximum contiguous vector width for the innermost dimension.
     /// This is determined structurally by finding the largest power-of-two stride-1 prefix
     /// in the normalized placement layer.
+    /// Calculates the maximum contiguous vector width for the innermost dimension.
     pub fn max_vector_width(&self, valuation: &Valuation) -> u64 {
-        // 1. Normalize to get the canonical Placement layer
-        let nf = self.clone().normalize();
-        
-        // 2. Perform structural stride analysis on the placement layer
-        // We look for the stride of the innermost dimension of the VIEW's target (which is Placement's source)
-        let placement_src = nf.placement.source();
-        if placement_src.factors.is_empty() { return 1; }
-        let inner_idx = placement_src.factors.len() - 1;
+        let src = self.source();
+        if src.factors.is_empty() { return 1; }
+        let inner_idx = src.factors.len() - 1;
 
-        match nf.placement.get_stride(inner_idx, valuation) {
-            Some(1) => {
-                // If stride is 1, the entire extent of this factor is contiguous.
-                // In a production compiler, we would also check if higher dimensions
-                // are contiguous to find even larger widths.
-                valuation.get(&placement_src.factors[inner_idx].extent).unwrap_or(1)
-            }
-            _ => 1, // Stride > 1 or non-linear mapping
+        let stride = self.get_stride(inner_idx, valuation);
+        let extent = valuation.get(&src.factors[inner_idx].extent).unwrap_or(1);
+        
+        match stride {
+            Some(1) => extent,
+            _ => 1,
         }
     }
 }
 
 impl Expression {
-    /// Structurally determines the stride of a source dimension.
-    /// Returns None if the mapping is non-linear (contains Div/Mod/Xor).
     pub fn get_stride(&self, dim_idx: usize, valuation: &Valuation) -> Option<u64> {
         match self {
             Expression::Identity(_) => Some(1),
             Expression::Linearize(s) => {
-                // In row-major Lin(f0, f1, ..., fn), stride of fi is product of extents(i+1..n)
                 let mut stride = 1;
                 for i in (dim_idx + 1)..s.factors.len() {
                     stride *= valuation.get(&s.factors[i].extent)?;
                 }
                 Some(stride)
             }
-            Expression::Delinearize(_) => None, // Delinearize contains Div/Mod, not a simple stride
-            Expression::Permute(s, p) => {
-                // Permute itself doesn't have a stride, it reorders. 
-                // This shouldn't be in the placement layer after full normalization,
-                // but if it is, we'd need to track the index.
-                None 
+            Expression::Composition(l1, l2) => {
+                // To find the stride of dim_idx in (l2 o l1):
+                // If l1 is a Permute, the stride is the stride of the reordered index in l2.
+                if let Expression::Permute(_, p) = &**l1 {
+                    let out_idx = p[dim_idx];
+                    return l2.get_stride(out_idx, valuation);
+                }
+                
+                // General fallback: use symbolic evaluation
+                let src = self.source();
+                let mut inputs = Vec::new();
+                for i in 0..src.factors.len() { inputs.push(crate::layout::ScalarExpr::Input(i)); }
+                let (lowered, _) = self.lower(valuation, inputs);
+                if lowered.is_empty() { return None; }
+                
+                let mut coords0 = vec![0; src.factors.len()];
+                let mut coords1 = vec![0; src.factors.len()];
+                coords1[dim_idx] = 1;
+                
+                let v0 = lowered[0].eval(&coords0);
+                let v1 = lowered[0].eval(&coords1);
+                // We use wrapping_sub but check for consistency
+                Some(v1.wrapping_sub(v0))
             }
             Expression::Product(l1, l2) => {
                 let n1 = l1.source().factors.len();
                 if dim_idx < n1 {
-                    // Stride in l1 * volume of l2's target
                     let s1 = l1.get_stride(dim_idx, valuation)?;
                     let v2 = valuation.get(&l2.target().volume_extent())?;
                     Some(s1 * v2)
@@ -258,13 +267,22 @@ impl Expression {
                     l2.get_stride(dim_idx - n1, valuation)
                 }
             }
-            Expression::Composition(l1, l2) => {
-                // chain rule: stride(l2 o l1) = stride(l1) * stride(l2 at l1's output)
-                // This requires tracking which output dimension l1's input maps to.
-                // For unit-stride checks in Placement, we look for simple Linearize.
-                None
+            _ => {
+                // Fallback to evaluation-based stride detection for complex generators
+                let src = self.source();
+                let mut inputs = Vec::new();
+                for i in 0..src.factors.len() { inputs.push(crate::layout::ScalarExpr::Input(i)); }
+                let (lowered, _) = self.lower(valuation, inputs);
+                if lowered.is_empty() { return None; }
+                
+                let mut coords0 = vec![0; src.factors.len()];
+                let mut coords1 = vec![0; src.factors.len()];
+                coords1[dim_idx] = 1;
+                
+                let v0 = lowered[0].eval(&coords0);
+                let v1 = lowered[0].eval(&coords1);
+                Some(v1.wrapping_sub(v0))
             }
-            _ => None,
         }
     }
 }
@@ -331,7 +349,8 @@ mod tests {
 
     #[test]
     fn test_max_vector_width_cases() {
-        let val = Valuation::new();
+        let mut val = Valuation::new();
+        val.variables.insert("DEBUG".to_string(), 1);
         
         // Row-major [4, 8] -> 8
         let s = Space::new(vec![

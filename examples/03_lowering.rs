@@ -16,10 +16,10 @@ fn main() {
     let lowered = lin.lower(&valuation, inputs);
 
     // 3. Final Device-Side Expression
-    println!("Device-Side Math: {:?}", lowered[0]);
+    println!("Device-Side Math: {:?}", lowered.0[0]);
     // It should represent (i0 * 8) + i1
     
     // 4. Simulate Device Execution
-    let result = lowered[0].eval(&[1, 2]); // i0=1, i1=2
+    let result = lowered.0[0].eval(&[1, 2]); // i0=1, i1=2
     println!("Device Simulated Execution result (1, 2) -> {}", result);
 }

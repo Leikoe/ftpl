@@ -10,6 +10,7 @@ pub enum ScalarExpr {
     Mod(Box<ScalarExpr>, Box<ScalarExpr>),
     Xor(Box<ScalarExpr>, Box<ScalarExpr>),
     BitShiftRight(Box<ScalarExpr>, u32),
+    BitLinear(Box<ScalarExpr>, Vec<Vec<u8>>), // Bit-matrix multiplication over GF(2)
     // Logical operations for Domain Predicates
     And(Box<ScalarExpr>, Box<ScalarExpr>),
     Lt(Box<ScalarExpr>, Box<ScalarExpr>), // Less than
@@ -33,6 +34,20 @@ impl ScalarExpr {
             }
             ScalarExpr::Xor(a, b) => a.eval(inputs) ^ b.eval(inputs),
             ScalarExpr::BitShiftRight(a, s) => a.eval(inputs) >> s,
+            ScalarExpr::BitLinear(a, m) => {
+                let val = a.eval(inputs);
+                let d = m.len();
+                let mut out = 0;
+                for i in 0..d {
+                    let mut bit = 0;
+                    for j in 0..d {
+                        bit ^= ((val >> j) & 1) & (m[i][j] as u64);
+                    }
+                    out |= bit << i;
+                }
+                let mask = (1 << d) - 1;
+                out | (val & !mask)
+            }
             ScalarExpr::And(a, b) => if a.eval(inputs) != 0 && b.eval(inputs) != 0 { 1 } else { 0 },
             ScalarExpr::Lt(a, b) => if a.eval(inputs) < b.eval(inputs) { 1 } else { 0 },
             ScalarExpr::Eq(a, b) => if a.eval(inputs) == b.eval(inputs) { 1 } else { 0 },
@@ -83,9 +98,52 @@ impl ScalarExpr {
                     _ => ScalarExpr::And(Box::new(a), Box::new(b)),
                 }
             }
+            ScalarExpr::BitLinear(a, m) => {
+                let a = a.simplify();
+                if let ScalarExpr::Constant(c) = a {
+                    ScalarExpr::Constant(ScalarExpr::BitLinear(Box::new(ScalarExpr::Constant(c)), m).eval(&[]))
+                } else {
+                    ScalarExpr::BitLinear(Box::new(a), m)
+                }
+            }
             _ => self,
         }
     }
+}
+
+pub fn invert_gf2(matrix: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
+    let n = matrix.len();
+    let mut aug = vec![vec![0u8; 2 * n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            aug[i][j] = matrix[i][j] & 1;
+        }
+        aug[i][i + n] = 1;
+    }
+    for i in 0..n {
+        let mut pivot = i;
+        while pivot < n && aug[pivot][i] == 0 {
+            pivot += 1;
+        }
+        if pivot == n {
+            return None; // Singular matrix
+        }
+        aug.swap(i, pivot);
+        for j in 0..n {
+            if i != j && aug[j][i] == 1 {
+                for k in 0..2 * n {
+                    aug[j][k] ^= aug[i][k];
+                }
+            }
+        }
+    }
+    let mut inv = vec![vec![0u8; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            inv[i][j] = aug[i][j + n];
+        }
+    }
+    Some(inv)
 }
 
 /// A partial typed layout `L : A ⇀ B`.
@@ -200,7 +258,7 @@ impl Layout for Expression {
                 let mut stride = 1;
                 for (f, &c) in s.factors.iter().rev().zip(input.iter().rev()) {
                     offset += c * stride;
-                    stride *= valuation.get(&f.extent)?;
+                    stride *= valuation.get_extent(&f.extent)?;
                 }
                 Some(vec![offset])
             }
@@ -209,7 +267,7 @@ impl Layout for Expression {
                 let mut offset = input[0];
                 let mut output = vec![0; s.factors.len()];
                 for (i, f) in s.factors.iter().enumerate().rev() {
-                    let extent = valuation.get(&f.extent)?;
+                    let extent = valuation.get_extent(&f.extent)?;
                     output[i] = offset % extent;
                     offset /= extent;
                 }
@@ -270,8 +328,8 @@ impl Layout for Expression {
                 if !s.is_valid(valuation, input) { return None; }
                 let mut output = Vec::new();
                 for (i, &c) in input.iter().enumerate() {
-                    let target_extent = valuation.get(&target.factors[i].extent)?;
-                    let source_extent = valuation.get(&s.factors[i].extent)?;
+                    let target_extent = valuation.get_extent(&target.factors[i].extent)?;
+                    let source_extent = valuation.get_extent(&s.factors[i].extent)?;
                     if source_extent > 1 && target_extent == 1 {
                         output.push(0);
                     } else {
@@ -293,7 +351,7 @@ impl Layout for Expression {
                 let mut output = Vec::new();
                 for (i, &c) in input.iter().enumerate() {
                     if dims[i] {
-                        let n = valuation.get(&s.factors[i].extent)?;
+                        let n = valuation.get_extent(&s.factors[i].extent)?;
                         output.push(n - 1 - c);
                     } else {
                         output.push(c);
@@ -314,7 +372,7 @@ impl Layout for Expression {
                 let mut output = input.to_vec();
                 let v1 = output.remove(*idx);
                 let v2 = output.remove(*idx);
-                let n2 = valuation.get(&s.factors[*idx + 1].extent)?;
+                let n2 = valuation.get_extent(&s.factors[*idx + 1].extent)?;
                 output.insert(*idx, v1 * n2 + v2);
                 Some(output)
             }
@@ -334,8 +392,8 @@ impl Layout for Expression {
                 if !s.is_valid(valuation, input) { return None; }
                 let mut output = Vec::new();
                 for (i, &c) in input.iter().enumerate() {
-                    let se = valuation.get(&s.factors[i].extent)?;
-                    let te = valuation.get(&target.factors[i].extent)?;
+                    let se = valuation.get_extent(&s.factors[i].extent)?;
+                    let te = valuation.get_extent(&target.factors[i].extent)?;
                     if te < se {
                         output.push(c % te);
                     } else {
@@ -357,7 +415,7 @@ impl Layout for Expression {
 
         // 2. Symbolic Bounds check for source space
         for (i, f) in self.source().factors.iter().enumerate() {
-            if let Some(extent) = valuation.get(&f.extent) {
+            if let Some(extent) = valuation.get_extent(&f.extent) {
                 let in_bounds = ScalarExpr::Lt(Box::new(inputs[i].clone()), Box::new(ScalarExpr::Constant(extent)));
                 domain = ScalarExpr::And(Box::new(domain), Box::new(in_bounds));
             }
@@ -369,7 +427,7 @@ impl Layout for Expression {
                 let mut offset = ScalarExpr::Constant(0);
                 let mut stride = 1;
                 for (i, f) in s.factors.iter().enumerate().rev() {
-                    let extent = valuation.get(&f.extent).unwrap_or(1);
+                    let extent = valuation.get_extent(&f.extent).unwrap_or(1);
                     let term = ScalarExpr::Mul(Box::new(inputs[i].clone()), Box::new(ScalarExpr::Constant(stride)));
                     offset = ScalarExpr::Add(Box::new(offset), Box::new(term));
                     stride *= extent;
@@ -381,12 +439,12 @@ impl Layout for Expression {
                 let mut offset = inputs[0].clone();
                 let mut output = vec![ScalarExpr::Constant(0); s.factors.len()];
                 for (i, f) in s.factors.iter().enumerate().rev() {
-                    let extent = valuation.get(&f.extent).unwrap_or(1);
+                    let extent = valuation.get_extent(&f.extent).unwrap_or(1);
                     output[i] = ScalarExpr::Mod(Box::new(offset.clone()), Box::new(ScalarExpr::Constant(extent))).simplify();
                     offset = ScalarExpr::Div(Box::new(offset), Box::new(ScalarExpr::Constant(extent))).simplify();
                 }
                 // Delinearize domain: offset must be less than volume
-                if let Some(vol) = valuation.get(&s.volume_extent()) {
+                if let Some(vol) = valuation.get_extent(&s.volume_extent()) {
                     let in_vol = ScalarExpr::Lt(Box::new(inputs[0].clone()), Box::new(ScalarExpr::Constant(vol)));
                     domain = ScalarExpr::And(Box::new(domain), Box::new(in_vol));
                 }
@@ -428,7 +486,7 @@ impl Layout for Expression {
                 let mut output = inputs;
                 let v1 = output.remove(*idx);
                 let v2 = output.remove(*idx);
-                let n2 = valuation.get(&s.factors[*idx + 1].extent).unwrap_or(1);
+                let n2 = valuation.get_extent(&s.factors[*idx + 1].extent).unwrap_or(1);
                 output.insert(*idx, ScalarExpr::Add(
                     Box::new(ScalarExpr::Mul(Box::new(v1), Box::new(ScalarExpr::Constant(n2)))),
                     Box::new(v2)
@@ -448,8 +506,8 @@ impl Layout for Expression {
             Expression::Repeat(s, target) => {
                 let mut output = Vec::new();
                 for (i, expr) in inputs.into_iter().enumerate() {
-                    let se = valuation.get(&s.factors[i].extent).unwrap_or(1);
-                    let te = valuation.get(&target.factors[i].extent).unwrap_or(1);
+                    let se = valuation.get_extent(&s.factors[i].extent).unwrap_or(1);
+                    let te = valuation.get_extent(&target.factors[i].extent).unwrap_or(1);
                     if te < se {
                         output.push(ScalarExpr::Mod(Box::new(expr), Box::new(ScalarExpr::Constant(te))).simplify());
                     } else { output.push(expr); }
@@ -459,29 +517,8 @@ impl Layout for Expression {
             Expression::BinaryShadow(s, matrix) => {
                 let (linearized, d) = Expression::Linearize(s.clone()).lower(valuation, inputs);
                 let offset = linearized[0].clone();
-                let d_mat = matrix.len();
-                let mut new_offset = ScalarExpr::Constant(0);
-                for i in 0..d_mat {
-                    let mut bit = ScalarExpr::Constant(0);
-                    for j in 0..d_mat {
-                        if matrix[i][j] == 1 {
-                            let bit_j = ScalarExpr::Mod(
-                                Box::new(ScalarExpr::Div(Box::new(offset.clone()), Box::new(ScalarExpr::Constant(1 << j)))),
-                                Box::new(ScalarExpr::Constant(2))
-                            );
-                            bit = ScalarExpr::Xor(Box::new(bit), Box::new(bit_j));
-                        }
-                    }
-                    let shifted_bit = ScalarExpr::Mul(Box::new(bit), Box::new(ScalarExpr::Constant(1 << i)));
-                    new_offset = ScalarExpr::Add(Box::new(new_offset), Box::new(shifted_bit));
-                }
-                let mask = (1 << d_mat) - 1;
-                let high_bits = ScalarExpr::Mul(
-                    Box::new(ScalarExpr::Div(Box::new(offset), Box::new(ScalarExpr::Constant(1 << d_mat)))),
-                    Box::new(ScalarExpr::Constant(1 << d_mat))
-                );
-                new_offset = ScalarExpr::Add(Box::new(new_offset), Box::new(high_bits));
-                let (output, d2) = Expression::Delinearize(s.clone()).lower(valuation, vec![new_offset]);
+                let bit_linear = ScalarExpr::BitLinear(Box::new(offset), matrix.clone());
+                let (output, d2) = Expression::Delinearize(s.clone()).lower(valuation, vec![bit_linear]);
                 (output, ScalarExpr::And(Box::new(d), Box::new(d2)).simplify())
             }
             Expression::Slice(_, ranges) => {
@@ -501,8 +538,8 @@ impl Layout for Expression {
             Expression::Broadcast(s, target) => {
                 let mut output = Vec::new();
                 for (i, expr) in inputs.into_iter().enumerate() {
-                    let se = valuation.get(&s.factors[i].extent).unwrap_or(1);
-                    let te = valuation.get(&target.factors[i].extent).unwrap_or(1);
+                    let se = valuation.get_extent(&s.factors[i].extent).unwrap_or(1);
+                    let te = valuation.get_extent(&target.factors[i].extent).unwrap_or(1);
                     if se > 1 && te == 1 { output.push(ScalarExpr::Constant(0)); }
                     else { output.push(expr); }
                 }
@@ -520,7 +557,7 @@ impl Layout for Expression {
                 let mut output = Vec::new();
                 for (i, expr) in inputs.into_iter().enumerate() {
                     if dims[i] {
-                        let n = valuation.get(&s.factors[i].extent).unwrap_or(1);
+                        let n = valuation.get_extent(&s.factors[i].extent).unwrap_or(1);
                         output.push(ScalarExpr::Add(
                             Box::new(ScalarExpr::Constant(n - 1)),
                             Box::new(ScalarExpr::Mul(Box::new(ScalarExpr::Constant(u64::MAX)), Box::new(expr))) // Simplified -expr
@@ -529,6 +566,39 @@ impl Layout for Expression {
                 }
                 (output, domain)
             }
+        }
+    }
+}
+
+impl Expression {
+    pub fn inverse(&self) -> Option<Expression> {
+        match self {
+            Expression::Identity(s) => Some(Expression::Identity(s.clone())),
+            Expression::Linearize(s) => Some(Expression::Delinearize(s.clone())),
+            Expression::Delinearize(s) => Some(Expression::Linearize(s.clone())),
+            Expression::Permute(s, p) => {
+                let mut inv_p = vec![0; p.len()];
+                for (i, &pos) in p.iter().enumerate() {
+                    inv_p[pos] = i;
+                }
+                Some(Expression::Permute(self.target(), inv_p))
+            }
+            Expression::Composition(l1, l2) => {
+                let inv1 = l1.inverse()?;
+                let inv2 = l2.inverse()?;
+                Some(Expression::Composition(Box::new(inv1), Box::new(inv2)))
+            }
+            Expression::Product(l1, l2) => {
+                let inv1 = l1.inverse()?;
+                let inv2 = l2.inverse()?;
+                Some(Expression::Product(Box::new(inv1), Box::new(inv2)))
+            }
+            Expression::Reshape(s, t) => Some(Expression::Reshape(t.clone(), s.clone())),
+            Expression::BinaryShadow(s, m) => {
+                let inv_m = invert_gf2(m)?;
+                Some(Expression::BinaryShadow(s.clone(), inv_m))
+            }
+            _ => None,
         }
     }
 }

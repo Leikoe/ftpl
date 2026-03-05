@@ -11,8 +11,8 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
         return "SVG Rendering currently only supports 2D source spaces (H, W)".to_string();
     }
 
-    let h_extent = valuation.get(&src.factors[0].extent).unwrap_or(1);
-    let w_extent = valuation.get(&src.factors[1].extent).unwrap_or(1);
+    let h_extent = valuation.get_extent(&src.factors[0].extent).unwrap_or(1);
+    let w_extent = valuation.get_extent(&src.factors[1].extent).unwrap_or(1);
 
     let cell_size = 60;
     let width = w_extent * cell_size;
@@ -47,7 +47,7 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
             let mut stride = 1;
             for &idx in exec_indices.iter().rev() {
                 exec_id += out[idx] * stride;
-                stride *= valuation.get(&tgt.factors[idx].extent).unwrap_or(1);
+                stride *= valuation.get_extent(&tgt.factors[idx].extent).unwrap_or(1);
                 has_exec = true;
             }
 
@@ -56,7 +56,7 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
             let mut storage_stride = 1;
             for &idx in storage_indices.iter().rev() {
                 storage_val += out[idx] * storage_stride;
-                storage_stride *= valuation.get(&tgt.factors[idx].extent).unwrap_or(1);
+                storage_stride *= valuation.get_extent(&tgt.factors[idx].extent).unwrap_or(1);
             }
 
             // 3. Generate color
@@ -64,7 +64,7 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
                 let hue = (exec_id * 137) % 360; 
                 format!("hsl({}, 70%, 80%)", hue)
             } else {
-                let max_vol = tgt.volume_extent().eval(&valuation.variables).unwrap_or(1);
+                let max_vol = tgt.volume_extent().try_eval(&valuation.variables).unwrap_or(1);
                 let intensity = (storage_val as f64 / max_vol as f64 * 200.0) as u8;
                 format!("rgb({}, {}, 255)", 255 - intensity, 255 - intensity)
             };

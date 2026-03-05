@@ -8,6 +8,7 @@ pub enum Judgment {
     Unknown,
 }
 
+#[derive(PartialEq)]
 pub struct LayeredNormalForm {
     pub view: Expression,
     pub placement: Expression,
@@ -87,8 +88,8 @@ impl Expression {
     pub fn is_aliasing(&self, valuation: &Valuation) -> Judgment {
         match self {
             Expression::Reshape(s, t) => {
-                let vol_s = valuation.get(&s.volume_extent());
-                let vol_t = valuation.get(&t.volume_extent());
+                let vol_s = valuation.get_extent(&s.volume_extent());
+                let vol_t = valuation.get_extent(&t.volume_extent());
                 match (vol_s, vol_t) {
                     (Some(vs), Some(vt)) => {
                         if vs > vt { Judgment::True } else { Judgment::False }
@@ -213,12 +214,40 @@ impl Expression {
         let inner_idx = src.factors.len() - 1;
 
         let stride = self.get_stride(inner_idx, valuation);
-        let extent = valuation.get(&src.factors[inner_idx].extent).unwrap_or(1);
+        let extent = valuation.get_extent(&src.factors[inner_idx].extent).unwrap_or(1);
         
         match stride {
             Some(1) => extent,
             _ => 1,
         }
+    }
+
+    /// Checks if this layout is formally equivalent to another layout.
+    /// According to the theory, L1 == L2 if their canonical Layered Normal Forms are identical.
+    pub fn equivalent_to(&self, other: &Expression) -> bool {
+        self.clone().normalize() == other.clone().normalize()
+    }
+
+    /// Implements the Shuffle Theorem: Generates a data movement layout from `self` to `target`.
+    /// Relies on finding the relative layout L_target o L_self^-1.
+    pub fn shuffle_to(&self, target_layout: &Expression) -> Option<Expression> {
+        let inv_self = self.inverse()?;
+        Some(Expression::Composition(Box::new(inv_self), Box::new(target_layout.clone())).simplify_recursive())
+    }
+
+    /// Analyzes the layout for potential bank conflicts.
+    /// Returns a list of (Execution Dimension Index, Stride in Memory).
+    /// If stride % num_banks == 0 and stride != 0, it represents a severe bank conflict.
+    pub fn bank_conflict_strides(&self, valuation: &Valuation) -> Vec<(usize, u64)> {
+        let mut conflicts = Vec::new();
+        for (i, f) in self.source().factors.iter().enumerate() {
+            if f.kind == Kind::Execution {
+                if let Some(stride) = self.get_stride(i, valuation) {
+                    conflicts.push((i, stride));
+                }
+            }
+        }
+        conflicts
     }
 }
 
@@ -229,7 +258,7 @@ impl Expression {
             Expression::Linearize(s) => {
                 let mut stride = 1;
                 for i in (dim_idx + 1)..s.factors.len() {
-                    stride *= valuation.get(&s.factors[i].extent)?;
+                    stride *= valuation.get_extent(&s.factors[i].extent)?;
                 }
                 Some(stride)
             }
@@ -261,7 +290,7 @@ impl Expression {
                 let n1 = l1.source().factors.len();
                 if dim_idx < n1 {
                     let s1 = l1.get_stride(dim_idx, valuation)?;
-                    let v2 = valuation.get(&l2.target().volume_extent())?;
+                    let v2 = valuation.get_extent(&l2.target().volume_extent())?;
                     Some(s1 * v2)
                 } else {
                     l2.get_stride(dim_idx - n1, valuation)

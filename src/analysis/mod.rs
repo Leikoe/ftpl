@@ -1,4 +1,4 @@
-use crate::core::{Space, Valuation, Kind, Factor, Extent};
+use crate::core::{Factor, Kind, Space, Valuation};
 use crate::layout::{Expression, Layout};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,14 +30,19 @@ impl Layout for LayeredNormalForm {
         self.shadow.apply(valuation, &p)
     }
 
-    fn lower(&self, valuation: &Valuation, inputs: Vec<crate::layout::ScalarExpr>) -> (Vec<crate::layout::ScalarExpr>, crate::layout::ScalarExpr) {
+    fn lower(
+        &self,
+        valuation: &Valuation,
+        inputs: Vec<crate::layout::ScalarExpr>,
+    ) -> (Vec<crate::layout::ScalarExpr>, crate::layout::ScalarExpr) {
         let (v, d1) = self.view.lower(valuation, inputs);
         let (p, d2) = self.placement.lower(valuation, v);
         let (s, d3) = self.shadow.lower(valuation, p);
         let domain = crate::layout::ScalarExpr::And(
             Box::new(d1),
-            Box::new(crate::layout::ScalarExpr::And(Box::new(d2), Box::new(d3)))
-        ).simplify();
+            Box::new(crate::layout::ScalarExpr::And(Box::new(d2), Box::new(d3))),
+        )
+        .simplify();
         (s, domain)
     }
 }
@@ -45,11 +50,19 @@ impl Layout for LayeredNormalForm {
 impl Expression {
     pub fn is_injective(&self) -> Judgment {
         match self {
-            Expression::Identity(_) | Expression::Linearize(_) | Expression::Delinearize(_) |
-            Expression::Permute(_, _) | Expression::Reshape(_, _) | Expression::Slice(_, _) |
-            Expression::Pad(_, _, _) | Expression::Flip(_, _) | Expression::BinaryShadow(_, _) |
-            Expression::Split(_, _, _) | Expression::Join(_, _) | Expression::Squeeze(_, _) |
-            Expression::Unsqueeze(_, _, _) => Judgment::True,
+            Expression::Identity(_)
+            | Expression::Linearize(_)
+            | Expression::Delinearize(_)
+            | Expression::Permute(_, _)
+            | Expression::Reshape(_, _)
+            | Expression::Slice(_, _)
+            | Expression::Pad(_, _, _)
+            | Expression::Flip(_, _)
+            | Expression::BinaryShadow(_, _)
+            | Expression::Split(_, _, _)
+            | Expression::Join(_, _)
+            | Expression::Squeeze(_, _)
+            | Expression::Unsqueeze(_, _, _) => Judgment::True,
             Expression::Composition(l1, l2) => match (l1.is_injective(), l2.is_injective()) {
                 (Judgment::True, Judgment::True) => Judgment::True,
                 (Judgment::False, _) | (_, Judgment::False) => Judgment::False,
@@ -66,11 +79,19 @@ impl Expression {
 
     pub fn is_surjective(&self) -> Judgment {
         match self {
-            Expression::Identity(_) | Expression::Linearize(_) | Expression::Delinearize(_) |
-            Expression::Permute(_, _) | Expression::Reshape(_, _) | Expression::Broadcast(_, _) |
-            Expression::Flip(_, _) | Expression::BinaryShadow(_, _) | Expression::Split(_, _, _) |
-            Expression::Join(_, _) | Expression::Squeeze(_, _) | Expression::Unsqueeze(_, _, _) |
-            Expression::Repeat(_, _) => Judgment::True,
+            Expression::Identity(_)
+            | Expression::Linearize(_)
+            | Expression::Delinearize(_)
+            | Expression::Permute(_, _)
+            | Expression::Reshape(_, _)
+            | Expression::Broadcast(_, _)
+            | Expression::Flip(_, _)
+            | Expression::BinaryShadow(_, _)
+            | Expression::Split(_, _, _)
+            | Expression::Join(_, _)
+            | Expression::Squeeze(_, _)
+            | Expression::Unsqueeze(_, _, _)
+            | Expression::Repeat(_, _) => Judgment::True,
             Expression::Composition(l1, l2) => match (l1.is_surjective(), l2.is_surjective()) {
                 (Judgment::True, Judgment::True) => Judgment::True,
                 (Judgment::False, _) | (_, Judgment::False) => Judgment::False,
@@ -92,19 +113,21 @@ impl Expression {
                 let vol_t = valuation.get_extent(&t.volume_extent());
                 match (vol_s, vol_t) {
                     (Some(vs), Some(vt)) => {
-                        if vs > vt { Judgment::True } else { Judgment::False }
+                        if vs > vt {
+                            Judgment::True
+                        } else {
+                            Judgment::False
+                        }
                     }
                     _ => Judgment::Unknown,
                 }
             }
             Expression::Broadcast(_, _) | Expression::Repeat(_, _) => Judgment::True,
-            _ => {
-                match self.is_injective() {
-                    Judgment::True => Judgment::False,
-                    Judgment::False => Judgment::True,
-                    Judgment::Unknown => Judgment::Unknown,
-                }
-            }
+            _ => match self.is_injective() {
+                Judgment::True => Judgment::False,
+                Judgment::False => Judgment::True,
+                Judgment::Unknown => Judgment::Unknown,
+            },
         }
     }
 
@@ -114,23 +137,41 @@ impl Expression {
                 let l1 = l1.simplify_recursive();
                 let l2 = l2.simplify_recursive();
                 match (l1, l2) {
-                    (Expression::Linearize(s1), Expression::Delinearize(s2)) if s1 == s2 => Expression::Identity(s1),
+                    (Expression::Linearize(s1), Expression::Delinearize(s2)) if s1 == s2 => {
+                        Expression::Identity(s1)
+                    }
                     (Expression::Delinearize(s1), Expression::Linearize(s2)) if s1 == s2 => {
                         let vol = s1.volume_extent();
-                        Expression::Identity(Space::new(vec![Factor::new(Kind::Other("Offset".to_string()), vol, None)]))
+                        Expression::Identity(Space::new(vec![Factor::new(
+                            Kind::Other("Offset".to_string()),
+                            vol,
+                            None,
+                        )]))
                     }
-                    (Expression::Reshape(s1, s2), Expression::Reshape(s2_prime, s3)) if s2 == s2_prime => Expression::Reshape(s1, s3),
-                    (Expression::Permute(s1, p1), Expression::Permute(s2, p2)) if s1.compatible(&Expression::Permute(s2.clone(), p2.clone()).target()) => {
+                    (Expression::Reshape(s1, s2), Expression::Reshape(s2_prime, s3))
+                        if s2 == s2_prime =>
+                    {
+                        Expression::Reshape(s1, s3)
+                    }
+                    (Expression::Permute(s1, p1), Expression::Permute(s2, p2))
+                        if s1.compatible(&Expression::Permute(s2.clone(), p2.clone()).target()) =>
+                    {
                         let mut p_final = vec![0; p1.len()];
-                        for i in 0..p1.len() { p_final[i] = p2[p1[i]]; }
+                        for i in 0..p1.len() {
+                            p_final[i] = p2[p1[i]];
+                        }
                         Expression::Permute(s1, p_final)
                     }
-                    (Expression::BinaryShadow(s1, m1), Expression::BinaryShadow(s2, m2)) if s1 == s2 => {
+                    (Expression::BinaryShadow(s1, m1), Expression::BinaryShadow(s2, m2))
+                        if s1 == s2 =>
+                    {
                         let d = m1.len();
                         let mut m_final = vec![vec![0; d]; d];
                         for i in 0..d {
                             for j in 0..d {
-                                for k in 0..d { m_final[i][j] ^= m1[i][k] & m2[k][j]; }
+                                for k in 0..d {
+                                    m_final[i][j] ^= m1[i][k] & m2[k][j];
+                                }
                             }
                         }
                         Expression::BinaryShadow(s1, m_final)
@@ -149,10 +190,18 @@ impl Expression {
 
     pub fn layer_type(&self) -> &'static str {
         match self {
-            Expression::Identity(_) | Expression::Slice(_, _) | Expression::Broadcast(_, _) | 
-            Expression::Permute(_, _) | Expression::Reshape(_, _) | Expression::Pad(_, _, _) |
-            Expression::Flip(_, _) | Expression::Split(_, _, _) | Expression::Join(_, _) |
-            Expression::Squeeze(_, _) | Expression::Unsqueeze(_, _, _) | Expression::Repeat(_, _) => "View",
+            Expression::Identity(_)
+            | Expression::Slice(_, _)
+            | Expression::Broadcast(_, _)
+            | Expression::Permute(_, _)
+            | Expression::Reshape(_, _)
+            | Expression::Pad(_, _, _)
+            | Expression::Flip(_, _)
+            | Expression::Split(_, _, _)
+            | Expression::Join(_, _)
+            | Expression::Squeeze(_, _)
+            | Expression::Unsqueeze(_, _, _)
+            | Expression::Repeat(_, _) => "View",
             Expression::Linearize(_) | Expression::Delinearize(_) => "Placement",
             Expression::BinaryShadow(_, _) => "Shadow",
             Expression::Composition(_, _) | Expression::Product(_, _) => "Complex",
@@ -166,9 +215,15 @@ impl Expression {
                 let nf1 = l1.normalize();
                 let nf2 = l2.normalize();
                 LayeredNormalForm {
-                    view: Expression::Composition(Box::new(nf1.view), Box::new(nf2.view)).simplify_recursive(),
-                    placement: Expression::Composition(Box::new(nf1.placement), Box::new(nf2.placement)).simplify_recursive(),
-                    shadow: Expression::Composition(Box::new(nf1.shadow), Box::new(nf2.shadow)).simplify_recursive(),
+                    view: Expression::Composition(Box::new(nf1.view), Box::new(nf2.view))
+                        .simplify_recursive(),
+                    placement: Expression::Composition(
+                        Box::new(nf1.placement),
+                        Box::new(nf2.placement),
+                    )
+                    .simplify_recursive(),
+                    shadow: Expression::Composition(Box::new(nf1.shadow), Box::new(nf2.shadow))
+                        .simplify_recursive(),
                 }
             }
             Expression::Identity(s) => LayeredNormalForm {
@@ -181,10 +236,26 @@ impl Expression {
                 let src = simplified.source();
                 let tgt = simplified.target();
                 match lt {
-                    "View" => LayeredNormalForm { view: simplified, placement: Expression::Identity(tgt.clone()), shadow: Expression::Identity(tgt) },
-                    "Placement" => LayeredNormalForm { view: Expression::Identity(src.clone()), placement: simplified, shadow: Expression::Identity(tgt) },
-                    "Shadow" => LayeredNormalForm { view: Expression::Identity(src.clone()), placement: Expression::Identity(src.clone()), shadow: simplified },
-                    _ => LayeredNormalForm { view: simplified, placement: Expression::Identity(tgt.clone()), shadow: Expression::Identity(tgt) }
+                    "View" => LayeredNormalForm {
+                        view: simplified,
+                        placement: Expression::Identity(tgt.clone()),
+                        shadow: Expression::Identity(tgt),
+                    },
+                    "Placement" => LayeredNormalForm {
+                        view: Expression::Identity(src.clone()),
+                        placement: simplified,
+                        shadow: Expression::Identity(tgt),
+                    },
+                    "Shadow" => LayeredNormalForm {
+                        view: Expression::Identity(src.clone()),
+                        placement: Expression::Identity(src.clone()),
+                        shadow: simplified,
+                    },
+                    _ => LayeredNormalForm {
+                        view: simplified,
+                        placement: Expression::Identity(tgt.clone()),
+                        shadow: Expression::Identity(tgt),
+                    },
                 }
             }
         }
@@ -193,9 +264,13 @@ impl Expression {
     pub fn left_div(self, target: Expression) -> Option<Expression> {
         match self {
             Expression::Product(t, r) => {
-                if *t == target { Some(*r) } else {
+                if *t == target {
+                    Some(*r)
+                } else {
                     if let Expression::Product(t_inner, a) = *t {
-                        if *t_inner == target { return Some(Expression::Product(a, r)); }
+                        if *t_inner == target {
+                            return Some(Expression::Product(a, r));
+                        }
                     }
                     None
                 }
@@ -210,12 +285,16 @@ impl Expression {
     /// Calculates the maximum contiguous vector width for the innermost dimension.
     pub fn max_vector_width(&self, valuation: &Valuation) -> u64 {
         let src = self.source();
-        if src.factors.is_empty() { return 1; }
+        if src.factors.is_empty() {
+            return 1;
+        }
         let inner_idx = src.factors.len() - 1;
 
         let stride = self.get_stride(inner_idx, valuation);
-        let extent = valuation.get_extent(&src.factors[inner_idx].extent).unwrap_or(1);
-        
+        let extent = valuation
+            .get_extent(&src.factors[inner_idx].extent)
+            .unwrap_or(1);
+
         match stride {
             Some(1) => extent,
             _ => 1,
@@ -232,7 +311,10 @@ impl Expression {
     /// Relies on finding the relative layout L_target o L_self^-1.
     pub fn shuffle_to(&self, target_layout: &Expression) -> Option<Expression> {
         let inv_self = self.inverse()?;
-        Some(Expression::Composition(Box::new(inv_self), Box::new(target_layout.clone())).simplify_recursive())
+        Some(
+            Expression::Composition(Box::new(inv_self), Box::new(target_layout.clone()))
+                .simplify_recursive(),
+        )
     }
 
     /// Analyzes the layout for potential bank conflicts.
@@ -240,8 +322,22 @@ impl Expression {
     /// If stride % num_banks == 0 and stride != 0, it represents a severe bank conflict.
     pub fn bank_conflict_strides(&self, valuation: &Valuation) -> Vec<(usize, u64)> {
         let mut conflicts = Vec::new();
-        for (i, f) in self.source().factors.iter().enumerate() {
+        let src = self.source();
+        for (i, f) in src.factors.iter().enumerate() {
             if f.kind == Kind::Execution {
+                // To get the stride, we use our structural get_stride.
+                // If it fails or is non-linear, we use symbolic evaluation as fallback.
+                if let Some(stride) = self.get_stride(i, valuation) {
+                    conflicts.push((i, stride));
+                }
+            }
+        }
+
+        // If we found nothing by factors, the layout might be a composition
+        // where Kind information was lost in the source space.
+        // We fallback to checking ALL dimensions of the source.
+        if conflicts.is_empty() {
+            for i in 0..src.factors.len() {
                 if let Some(stride) = self.get_stride(i, valuation) {
                     conflicts.push((i, stride));
                 }
@@ -269,18 +365,22 @@ impl Expression {
                     let out_idx = p[dim_idx];
                     return l2.get_stride(out_idx, valuation);
                 }
-                
+
                 // General fallback: use symbolic evaluation
                 let src = self.source();
                 let mut inputs = Vec::new();
-                for i in 0..src.factors.len() { inputs.push(crate::layout::ScalarExpr::Input(i)); }
+                for i in 0..src.factors.len() {
+                    inputs.push(crate::layout::ScalarExpr::Input(i));
+                }
                 let (lowered, _) = self.lower(valuation, inputs);
-                if lowered.is_empty() { return None; }
-                
-                let mut coords0 = vec![0; src.factors.len()];
+                if lowered.is_empty() {
+                    return None;
+                }
+
+                let coords0 = vec![0; src.factors.len()];
                 let mut coords1 = vec![0; src.factors.len()];
                 coords1[dim_idx] = 1;
-                
+
                 let v0 = lowered[0].eval(&coords0);
                 let v1 = lowered[0].eval(&coords1);
                 // We use wrapping_sub but check for consistency
@@ -300,14 +400,18 @@ impl Expression {
                 // Fallback to evaluation-based stride detection for complex generators
                 let src = self.source();
                 let mut inputs = Vec::new();
-                for i in 0..src.factors.len() { inputs.push(crate::layout::ScalarExpr::Input(i)); }
+                for i in 0..src.factors.len() {
+                    inputs.push(crate::layout::ScalarExpr::Input(i));
+                }
                 let (lowered, _) = self.lower(valuation, inputs);
-                if lowered.is_empty() { return None; }
-                
-                let mut coords0 = vec![0; src.factors.len()];
+                if lowered.is_empty() {
+                    return None;
+                }
+
+                let coords0 = vec![0; src.factors.len()];
                 let mut coords1 = vec![0; src.factors.len()];
                 coords1[dim_idx] = 1;
-                
+
                 let v0 = lowered[0].eval(&coords0);
                 let v1 = lowered[0].eval(&coords1);
                 Some(v1.wrapping_sub(v0))
@@ -319,7 +423,7 @@ impl Expression {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Kind, Extent, Factor, Space, Valuation};
+    use crate::core::{Extent, Factor, Kind, Space, Valuation};
 
     #[test]
     fn test_left_div() {
@@ -337,7 +441,10 @@ mod tests {
     fn test_structural_judgments() {
         let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
         let id = Expression::Identity(s.clone());
-        let broadcast = Expression::Broadcast(s.clone(), Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(1), None)]));
+        let broadcast = Expression::Broadcast(
+            s.clone(),
+            Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(1), None)]),
+        );
         let valuation = Valuation::new();
         assert_eq!(id.is_injective(), Judgment::True);
         assert_eq!(broadcast.is_injective(), Judgment::False);
@@ -350,7 +457,7 @@ mod tests {
         let lin = Expression::Linearize(s.clone());
         let delin = Expression::Delinearize(s.clone());
         let comp = Expression::Composition(Box::new(lin), Box::new(delin));
-        
+
         let nf = comp.normalize();
         // lin o delin should simplify to identity in normalization
         assert_eq!(nf.placement, Expression::Identity(s));
@@ -358,11 +465,18 @@ mod tests {
 
     #[test]
     fn test_tensor_core_fit_analysis() {
-        let frag = Space::new(vec![Factor::new(Kind::Fragment, Extent::Constant(16), None)]);
+        let frag = Space::new(vec![Factor::new(
+            Kind::Fragment,
+            Extent::Constant(16),
+            None,
+        )]);
         let instr = Expression::Linearize(frag.clone());
         let tile = Space::new(vec![Factor::new(Kind::Tile, Extent::Constant(2), None)]);
-        let program = Expression::Product(Box::new(instr.clone()), Box::new(Expression::Identity(tile.clone())));
-        
+        let program = Expression::Product(
+            Box::new(instr.clone()),
+            Box::new(Expression::Identity(tile.clone())),
+        );
+
         assert!(program.left_div(instr).is_some());
     }
 
@@ -371,7 +485,7 @@ mod tests {
         let s = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
         let id = Expression::Identity(s.clone());
         let slice = Expression::Slice(s.clone(), vec![(0, 5)]);
-        
+
         assert_eq!(id.is_surjective(), Judgment::True);
         assert_eq!(slice.is_surjective(), Judgment::False);
     }
@@ -380,7 +494,7 @@ mod tests {
     fn test_max_vector_width_cases() {
         let mut val = Valuation::new();
         val.variables.insert("DEBUG".to_string(), 1);
-        
+
         // Row-major [4, 8] -> 8
         let s = Space::new(vec![
             Factor::new(Kind::Logical, Extent::Constant(4), None),
@@ -400,13 +514,13 @@ mod tests {
         let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(4), None)]);
         let s2 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(4), None)]);
         let s3 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(4), None)]);
-        
+
         // Rule 5: Reshape Fusion
         let r1 = Expression::Reshape(s1.clone(), s2.clone());
         let r2 = Expression::Reshape(s2.clone(), s3.clone());
         let comp = Expression::Composition(Box::new(r1), Box::new(r2));
         let simplified = comp.simplify_recursive();
-        
+
         if let Expression::Reshape(src, tgt) = simplified {
             assert_eq!(src, s1);
             assert_eq!(tgt, s3);
@@ -428,7 +542,7 @@ mod tests {
         let s10 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
         let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(1), None)]);
         let broadcast = Expression::Broadcast(s10, s1);
-        
+
         assert_eq!(broadcast.is_aliasing(&val), Judgment::True);
     }
 }

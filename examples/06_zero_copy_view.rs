@@ -19,11 +19,14 @@ fn main() {
     ]);
     let transpose = Expression::Permute(s8_4.clone(), vec![1, 0]);
     let reshape = Expression::Reshape(s4_8.clone(), s8_4.clone());
-    
+
     // L_final = L_orig o Transpose o Reshape
     let l_final = Expression::Composition(
         Box::new(reshape),
-        Box::new(Expression::Composition(Box::new(transpose), Box::new(l_orig)))
+        Box::new(Expression::Composition(
+            Box::new(transpose),
+            Box::new(l_orig),
+        )),
     );
 
     // 3. Symbolic Lowering (The "Free" Proof)
@@ -34,13 +37,18 @@ fn main() {
     println!("[FTPL Analysis]");
     println!("  The transformation is composed of 3 stages, but the compiler");
     println!("  fuses them into a single device-side scalar expression.");
-    println!("\n  Final Lowered Expression: {:?}", lowered.0[0].clone().simplify());
-    
+    println!(
+        "\n  Final Lowered Expression: {:?}",
+        lowered.0[0].clone().simplify()
+    );
+
     println!("\nCONCLUSION:");
     println!("  Is it 'Free'? Yes and No.");
     println!("  - YES: FTPL can represent it purely as metadata (Zero-Copy).");
     println!("  - NO:  The generated expression contains expensive Div and Mod operations!");
     println!("         `((i1 + i0 * 8) / 4) % 8 + ((i1 + i0 * 8) % 4) * 8`");
     println!("         This proves the transformation broke contiguity.");
-    println!("         To get back to cheap affine strides, the compiler must insert a physical copy.");
+    println!(
+        "         To get back to cheap affine strides, the compiler must insert a physical copy."
+    );
 }

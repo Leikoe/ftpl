@@ -19,11 +19,14 @@ fn main() {
     ]);
     let transpose = Expression::Permute(s8_4.clone(), vec![1, 0]);
     let reshape = Expression::Reshape(s4_8.clone(), s8_4.clone());
-    
+
     // Final Layout = Linearize(4, 8) o Transpose(8->4) o Reshape(4->8)
     let l_final = Expression::Composition(
         Box::new(reshape),
-        Box::new(Expression::Composition(Box::new(transpose), Box::new(l_orig.clone())))
+        Box::new(Expression::Composition(
+            Box::new(transpose),
+            Box::new(l_orig.clone()),
+        )),
     );
 
     // 3. Symbolic Comparison
@@ -33,7 +36,10 @@ fn main() {
     let lowered_final = l_final.lower(&valuation, inputs);
 
     println!("  Original Address: {:?}", lowered_orig.0[0]);
-    println!("  Final Address:    {:?}", lowered_final.0[0].clone().simplify());
+    println!(
+        "  Final Address:    {:?}",
+        lowered_final.0[0].clone().simplify()
+    );
 
     println!("\nCONCLUSION:");
     if lowered_orig.0[0] == lowered_final.0[0].clone().simplify() {

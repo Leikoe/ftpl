@@ -51,7 +51,9 @@ impl Extent {
     pub fn simplify(self) -> Self {
         match self {
             Extent::Product(mut parts) => {
-                if parts.is_empty() { return Extent::Constant(1); }
+                if parts.is_empty() {
+                    return Extent::Constant(1);
+                }
                 parts = parts.into_iter().map(|p| p.simplify()).collect();
                 let mut const_val = 1;
                 let mut new_parts = Vec::new();
@@ -152,7 +154,8 @@ impl Space {
     }
 
     pub fn permute(&self, p: &[usize]) -> Space {
-        let mut factors = vec![Factor::new(Kind::Logical, Extent::Constant(0), None); self.factors.len()];
+        let mut factors =
+            vec![Factor::new(Kind::Logical, Extent::Constant(0), None); self.factors.len()];
         for (i, &pos) in p.iter().enumerate() {
             factors[pos] = self.factors[i].clone();
         }
@@ -160,7 +163,9 @@ impl Space {
     }
 
     pub fn linearize(&self, coords: &[u64], valuation: &Valuation) -> Option<u64> {
-        if !self.is_valid(valuation, coords) { return None; }
+        if !self.is_valid(valuation, coords) {
+            return None;
+        }
         let mut offset = 0;
         let mut stride = 1;
         for (f, &c) in self.factors.iter().rev().zip(coords.iter().rev()) {
@@ -177,7 +182,9 @@ impl Space {
             output[i] = offset % extent;
             offset /= extent;
         }
-        if offset > 0 { return None; }
+        if offset > 0 {
+            return None;
+        }
         Some(output)
     }
 }
@@ -208,7 +215,10 @@ mod tests {
         let mut valuation = Valuation::new();
         valuation.variables.insert("N".to_string(), 10);
         valuation.variables.insert("M".to_string(), 20);
-        let e3 = Extent::Product(vec![Extent::Variable("N".to_string()), Extent::Variable("M".to_string())]);
+        let e3 = Extent::Product(vec![
+            Extent::Variable("N".to_string()),
+            Extent::Variable("M".to_string()),
+        ]);
         assert_eq!(valuation.get_extent(&e3).unwrap(), 200);
     }
 
@@ -217,7 +227,7 @@ mod tests {
         let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(2), None)]);
         let s2 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(3), None)]);
         let s3 = s1.product(&s2);
-        
+
         assert_eq!(s3.factors.len(), 2);
         let val = Valuation::new();
         assert_eq!(val.get_extent(&s3.volume_extent()).unwrap(), 6);
@@ -230,12 +240,12 @@ mod tests {
             Factor::new(Kind::Logical, Extent::Constant(3), None),
         ]);
         let val = Valuation::new();
-        
+
         assert!(s.is_valid(&val, &[0, 0]));
         assert!(s.is_valid(&val, &[1, 2]));
         assert!(!s.is_valid(&val, &[2, 0]));
         assert!(!s.is_valid(&val, &[0, 3]));
-        assert!(!s.is_valid(&val, &[0])); 
+        assert!(!s.is_valid(&val, &[0]));
     }
 
     #[test]
@@ -243,8 +253,8 @@ mod tests {
         let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
         let s2 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(10), None)]);
         let s3 = Space::new(vec![Factor::new(Kind::Storage, Extent::Constant(10), None)]);
-        
+
         assert!(s1.compatible(&s2));
-        assert!(!s1.compatible(&s3)); 
+        assert!(!s1.compatible(&s3));
     }
 }

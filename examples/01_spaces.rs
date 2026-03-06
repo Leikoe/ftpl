@@ -14,9 +14,11 @@ fn main() {
     println!("Volume Extent: {:?}", space.volume_extent());
 
     // 2. Spaces can be combined using products
-    let batch = Space::new(vec![
-        Factor::new(Kind::Logical, Extent::Constant(32), Some("B".to_string())),
-    ]);
+    let batch = Space::new(vec![Factor::new(
+        Kind::Logical,
+        Extent::Constant(32),
+        Some("B".to_string()),
+    )]);
     let batched_space = batch.product(&space);
 
     println!("Batched Space Factors: {}", batched_space.factors.len()); // 3 factors: B, H, W

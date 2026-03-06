@@ -1,4 +1,6 @@
-use crate::core::{Space, Valuation, Kind};
+pub mod cuda;
+
+use crate::core::{Kind, Valuation};
 use crate::layout::{Expression, Layout};
 
 /// Renders a 2D layout as an SVG grid.
@@ -6,7 +8,7 @@ use crate::layout::{Expression, Layout};
 pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
     let src = layout.source();
     let tgt = layout.target();
-    
+
     if src.factors.len() != 2 {
         return "SVG Rendering currently only supports 2D source spaces (H, W)".to_string();
     }
@@ -39,8 +41,10 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
             let x = w * cell_size;
             let y = h * cell_size;
 
-            let out = layout.apply(valuation, &[h, w]).unwrap_or_else(|| vec![0; tgt.factors.len()]);
-            
+            let out = layout
+                .apply(valuation, &[h, w])
+                .unwrap_or_else(|| vec![0; tgt.factors.len()]);
+
             // 1. Calculate Execution Unit ID for coloring
             let mut exec_id = 0;
             let mut has_exec = false;
@@ -61,10 +65,13 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
 
             // 3. Generate color
             let color = if has_exec {
-                let hue = (exec_id * 137) % 360; 
+                let hue = (exec_id * 137) % 360;
                 format!("hsl({}, 70%, 80%)", hue)
             } else {
-                let max_vol = tgt.volume_extent().try_eval(&valuation.variables).unwrap_or(1);
+                let max_vol = tgt
+                    .volume_extent()
+                    .try_eval(&valuation.variables)
+                    .unwrap_or(1);
                 let intensity = (storage_val as f64 / max_vol as f64 * 200.0) as u8;
                 format!("rgb({}, {}, 255)", 255 - intensity, 255 - intensity)
             };
@@ -73,7 +80,7 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
                 "  <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\" stroke=\"black\" />\n",
                 x, y, cell_size, cell_size, color
             ));
-            
+
             // 4. Context-Aware Label
             let label = if has_exec {
                 format!("T{}:{}", exec_id, storage_val)

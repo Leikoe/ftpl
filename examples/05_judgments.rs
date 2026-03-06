@@ -11,11 +11,14 @@ fn main() {
     // 2. Aliasing (Broadcasting): Multiple logical points map to the same point
     let s1 = Space::new(vec![Factor::new(Kind::Logical, Extent::Constant(1), None)]);
     let broadcast = Expression::Broadcast(s.clone(), s1.clone());
-    
+
     // Judgment requires a valuation for volume-based analysis
     let valuation = Valuation::new();
-    println!("Is Broadcast aliasing? {:?}", broadcast.is_aliasing(&valuation));
-    
+    println!(
+        "Is Broadcast aliasing? {:?}",
+        broadcast.is_aliasing(&valuation)
+    );
+
     // 3. Surjective: Covers the entire target space
     println!("Is Broadcast surjective? {:?}", broadcast.is_surjective());
 }

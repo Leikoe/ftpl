@@ -18,14 +18,17 @@ fn main() {
     ]);
     let program_layout = Expression::Product(
         Box::new(hardware_primitive.clone()),
-        Box::new(Expression::Identity(tile_2x2))
+        Box::new(Expression::Identity(tile_2x2)),
     );
 
     // 3. Verification: Can we fit the 16x16 primitive onto the 32x32 layout?
     // This is checking if the primitive "divides" into the layout.
     if let Some(remainder) = program_layout.left_div(hardware_primitive) {
         println!("SUCCESS: Primitive Fits!");
-        println!("Remainder Layout (the 2x2 loop space): {:?}", remainder.source().volume_extent());
+        println!(
+            "Remainder Layout (the 2x2 loop space): {:?}",
+            remainder.source().volume_extent()
+        );
     } else {
         println!("FAILURE: Primitive Does Not Fit.");
     }

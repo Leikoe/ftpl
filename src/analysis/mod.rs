@@ -1,5 +1,5 @@
 use crate::core::{Factor, Kind, Space, Valuation};
-use crate::layout::{Expression, Layout};
+use crate::layout::{AsLayout, Expression, ScalarExpr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Judgment {
@@ -15,7 +15,7 @@ pub struct LayeredNormalForm {
     pub shadow: Expression,
 }
 
-impl Layout for LayeredNormalForm {
+impl AsLayout for LayeredNormalForm {
     fn source(&self) -> Space {
         self.view.source()
     }
@@ -30,17 +30,13 @@ impl Layout for LayeredNormalForm {
         self.shadow.apply(valuation, &p)
     }
 
-    fn lower(
-        &self,
-        valuation: &Valuation,
-        inputs: Vec<crate::layout::ScalarExpr>,
-    ) -> (Vec<crate::layout::ScalarExpr>, crate::layout::ScalarExpr) {
+    fn lower(&self, valuation: &Valuation, inputs: Vec<ScalarExpr>) -> (Vec<ScalarExpr>, ScalarExpr) {
         let (v, d1) = self.view.lower(valuation, inputs);
         let (p, d2) = self.placement.lower(valuation, v);
         let (s, d3) = self.shadow.lower(valuation, p);
-        let domain = crate::layout::ScalarExpr::And(
+        let domain = ScalarExpr::And(
             Box::new(d1),
-            Box::new(crate::layout::ScalarExpr::And(Box::new(d2), Box::new(d3))),
+            Box::new(ScalarExpr::And(Box::new(d2), Box::new(d3))),
         )
         .simplify();
         (s, domain)
@@ -137,6 +133,8 @@ impl Expression {
                 let l1 = l1.simplify_recursive();
                 let l2 = l2.simplify_recursive();
                 match (l1, l2) {
+                    (Expression::Identity(_), l) => l,
+                    (l, Expression::Identity(_)) => l,
                     (Expression::Linearize(s1), Expression::Delinearize(s2)) if s1 == s2 => {
                         Expression::Identity(s1)
                     }
@@ -154,13 +152,26 @@ impl Expression {
                         Expression::Reshape(s1, s3)
                     }
                     (Expression::Permute(s1, p1), Expression::Permute(s2, p2))
-                        if s1.compatible(&Expression::Permute(s2.clone(), p2.clone()).target()) =>
+                        if s1.compatible(
+                            &Expression::Permute(s2.clone(), p2.clone()).target(),
+                        ) =>
                     {
                         let mut p_final = vec![0; p1.len()];
                         for i in 0..p1.len() {
                             p_final[i] = p2[p1[i]];
                         }
-                        Expression::Permute(s1, p_final)
+                        
+                        // Check if p_final is the identity: [0, 1, 2, ...]
+                        let mut is_id = true;
+                        for (i, &p) in p_final.iter().enumerate() {
+                            if p != i { is_id = false; break; }
+                        }
+                        
+                        if is_id {
+                            Expression::Identity(s1)
+                        } else {
+                            Expression::Permute(s1, p_final)
+                        }
                     }
                     (Expression::BinaryShadow(s1, m1), Expression::BinaryShadow(s2, m2))
                         if s1 == s2 =>
@@ -261,6 +272,55 @@ impl Expression {
         }
     }
 
+    pub fn max_vector_width(&self, valuation: &Valuation) -> u64 {
+        let src = self.source();
+        if src.factors.is_empty() {
+            return 1;
+        }
+        let inner_idx = src.factors.len() - 1;
+
+        let stride = self.get_stride(inner_idx, valuation);
+        let extent = valuation.get_extent(&src.factors[inner_idx].extent).unwrap_or(1);
+
+        match stride {
+            Some(1) => extent,
+            _ => 1,
+        }
+    }
+
+    pub fn equivalent_to(&self, other: &Expression) -> bool {
+        self.clone().normalize() == other.clone().normalize()
+    }
+
+    pub fn shuffle_to(&self, target_layout: &Expression) -> Option<Expression> {
+        let inv_self = self.inverse()?;
+        Some(
+            Expression::Composition(Box::new(inv_self), Box::new(target_layout.clone()))
+                .simplify_recursive(),
+        )
+    }
+
+    pub fn bank_conflict_strides(&self, valuation: &Valuation) -> Vec<(usize, u64)> {
+        let mut conflicts = Vec::new();
+        let src = self.source();
+        for (i, f) in src.factors.iter().enumerate() {
+            if f.kind == Kind::Execution {
+                if let Some(stride) = self.get_stride(i, valuation) {
+                    conflicts.push((i, stride));
+                }
+            }
+        }
+
+        if conflicts.is_empty() {
+            for i in 0..src.factors.len() {
+                if let Some(stride) = self.get_stride(i, valuation) {
+                    conflicts.push((i, stride));
+                }
+            }
+        }
+        conflicts
+    }
+
     pub fn left_div(self, target: Expression) -> Option<Expression> {
         match self {
             Expression::Product(t, r) => {
@@ -279,75 +339,6 @@ impl Expression {
         }
     }
 
-    /// Calculates the maximum contiguous vector width for the innermost dimension.
-    /// This is determined structurally by finding the largest power-of-two stride-1 prefix
-    /// in the normalized placement layer.
-    /// Calculates the maximum contiguous vector width for the innermost dimension.
-    pub fn max_vector_width(&self, valuation: &Valuation) -> u64 {
-        let src = self.source();
-        if src.factors.is_empty() {
-            return 1;
-        }
-        let inner_idx = src.factors.len() - 1;
-
-        let stride = self.get_stride(inner_idx, valuation);
-        let extent = valuation
-            .get_extent(&src.factors[inner_idx].extent)
-            .unwrap_or(1);
-
-        match stride {
-            Some(1) => extent,
-            _ => 1,
-        }
-    }
-
-    /// Checks if this layout is formally equivalent to another layout.
-    /// According to the theory, L1 == L2 if their canonical Layered Normal Forms are identical.
-    pub fn equivalent_to(&self, other: &Expression) -> bool {
-        self.clone().normalize() == other.clone().normalize()
-    }
-
-    /// Implements the Shuffle Theorem: Generates a data movement layout from `self` to `target`.
-    /// Relies on finding the relative layout L_target o L_self^-1.
-    pub fn shuffle_to(&self, target_layout: &Expression) -> Option<Expression> {
-        let inv_self = self.inverse()?;
-        Some(
-            Expression::Composition(Box::new(inv_self), Box::new(target_layout.clone()))
-                .simplify_recursive(),
-        )
-    }
-
-    /// Analyzes the layout for potential bank conflicts.
-    /// Returns a list of (Execution Dimension Index, Stride in Memory).
-    /// If stride % num_banks == 0 and stride != 0, it represents a severe bank conflict.
-    pub fn bank_conflict_strides(&self, valuation: &Valuation) -> Vec<(usize, u64)> {
-        let mut conflicts = Vec::new();
-        let src = self.source();
-        for (i, f) in src.factors.iter().enumerate() {
-            if f.kind == Kind::Execution {
-                // To get the stride, we use our structural get_stride.
-                // If it fails or is non-linear, we use symbolic evaluation as fallback.
-                if let Some(stride) = self.get_stride(i, valuation) {
-                    conflicts.push((i, stride));
-                }
-            }
-        }
-
-        // If we found nothing by factors, the layout might be a composition
-        // where Kind information was lost in the source space.
-        // We fallback to checking ALL dimensions of the source.
-        if conflicts.is_empty() {
-            for i in 0..src.factors.len() {
-                if let Some(stride) = self.get_stride(i, valuation) {
-                    conflicts.push((i, stride));
-                }
-            }
-        }
-        conflicts
-    }
-}
-
-impl Expression {
     pub fn get_stride(&self, dim_idx: usize, valuation: &Valuation) -> Option<u64> {
         match self {
             Expression::Identity(_) => Some(1),
@@ -359,18 +350,15 @@ impl Expression {
                 Some(stride)
             }
             Expression::Composition(l1, l2) => {
-                // To find the stride of dim_idx in (l2 o l1):
-                // If l1 is a Permute, the stride is the stride of the reordered index in l2.
                 if let Expression::Permute(_, p) = &**l1 {
                     let out_idx = p[dim_idx];
                     return l2.get_stride(out_idx, valuation);
                 }
 
-                // General fallback: use symbolic evaluation
                 let src = self.source();
                 let mut inputs = Vec::new();
                 for i in 0..src.factors.len() {
-                    inputs.push(crate::layout::ScalarExpr::Input(i));
+                    inputs.push(ScalarExpr::Input(i));
                 }
                 let (lowered, _) = self.lower(valuation, inputs);
                 if lowered.is_empty() {
@@ -383,7 +371,6 @@ impl Expression {
 
                 let v0 = lowered[0].eval(&coords0);
                 let v1 = lowered[0].eval(&coords1);
-                // We use wrapping_sub but check for consistency
                 Some(v1.wrapping_sub(v0))
             }
             Expression::Product(l1, l2) => {
@@ -397,11 +384,10 @@ impl Expression {
                 }
             }
             _ => {
-                // Fallback to evaluation-based stride detection for complex generators
                 let src = self.source();
                 let mut inputs = Vec::new();
                 for i in 0..src.factors.len() {
-                    inputs.push(crate::layout::ScalarExpr::Input(i));
+                    inputs.push(ScalarExpr::Input(i));
                 }
                 let (lowered, _) = self.lower(valuation, inputs);
                 if lowered.is_empty() {
@@ -459,17 +445,12 @@ mod tests {
         let comp = Expression::Composition(Box::new(lin), Box::new(delin));
 
         let nf = comp.normalize();
-        // lin o delin should simplify to identity in normalization
         assert_eq!(nf.placement, Expression::Identity(s));
     }
 
     #[test]
     fn test_tensor_core_fit_analysis() {
-        let frag = Space::new(vec![Factor::new(
-            Kind::Fragment,
-            Extent::Constant(16),
-            None,
-        )]);
+        let frag = Space::new(vec![Factor::new(Kind::Fragment, Extent::Constant(16), None)]);
         let instr = Expression::Linearize(frag.clone());
         let tile = Space::new(vec![Factor::new(Kind::Tile, Extent::Constant(2), None)]);
         let program = Expression::Product(
@@ -533,7 +514,8 @@ mod tests {
         let p2 = Expression::Permute(s1.clone(), vec![0]);
         let comp_p = Expression::Composition(Box::new(p1), Box::new(p2));
         let simplified_p = comp_p.simplify_recursive();
-        assert!(matches!(simplified_p, Expression::Permute(_, _)));
+        // Identity [0] followed by [0] is the Identity layout.
+        assert!(matches!(simplified_p, Expression::Identity(_)));
     }
 
     #[test]

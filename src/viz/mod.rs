@@ -1,7 +1,7 @@
 pub mod cuda;
 
-use crate::core::{Kind, Valuation};
-use crate::layout::{Expression, Layout};
+use crate::core::{Kind, Space, Valuation};
+use crate::layout::{AsLayout, Expression, Layout};
 
 /// Renders a 2D layout as an SVG grid.
 /// Colors cells by the Execution resource (e.g. ThreadID) and labels with Storage offset.
@@ -56,6 +56,7 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
             }
 
             // 2. Calculate Storage Offset for text
+            // We linearize the storage factors to get a single global offset
             let mut storage_val = 0;
             let mut storage_stride = 1;
             for &idx in storage_indices.iter().rev() {
@@ -64,6 +65,7 @@ pub fn render_svg(layout: &Expression, valuation: &Valuation) -> String {
             }
 
             // 3. Generate color
+            // If has execution units, color by ID. Otherwise, color by offset (heatmap).
             let color = if has_exec {
                 let hue = (exec_id * 137) % 360;
                 format!("hsl({}, 70%, 80%)", hue)

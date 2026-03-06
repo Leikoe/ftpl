@@ -1,25 +1,24 @@
 use ftpl::*;
 
 fn main() {
-    println!("--- Example 01: Defining Spaces ---");
+    println!("--- Example 01: High-Level Ergonomic Constructors ---");
 
-    // 1. Define a simple 2D space [Height=128, Width=128]
-    // Each dimension is a 'Factor' with a role (Kind) and an extent.
-    let space = Space::new(vec![
-        Factor::new(Kind::Logical, Extent::Constant(128), Some("H".to_string())),
-        Factor::new(Kind::Logical, Extent::Constant(128), Some("W".to_string())),
-    ]);
+    // 1. From Array: row_major([8, 4])
+    let l1 = Layout::row_major([8, 4]);
+    println!("From Array [8, 4]: Rank {}", l1.source().rank());
 
-    println!("Space: {:?}", space);
-    println!("Volume Extent: {:?}", space.volume_extent());
+    // 2. From Tuple (Mixed Variable & Constant): row_major(("B", 1024))
+    // "B" becomes Extent::Variable("B")
+    // 1024 becomes Extent::Constant(1024)
+    let l2 = Layout::row_major(("B", 1024));
+    println!("From Mixed Tuple (\"B\", 1024):");
+    println!("  Dim 0 Extent: {:?}", l2.source().factors[0].extent);
+    println!("  Dim 1 Extent: {:?}", l2.source().factors[1].extent);
 
-    // 2. Spaces can be combined using products
-    let batch = Space::new(vec![Factor::new(
-        Kind::Logical,
-        Extent::Constant(32),
-        Some("B".to_string()),
-    )]);
-    let batched_space = batch.product(&space);
-
-    println!("Batched Space Factors: {}", batched_space.factors.len()); // 3 factors: B, H, W
+    // 3. Symbolic Evaluation
+    let mut valuation = Valuation::new();
+    valuation.variables.insert("B".to_string(), 32);
+    
+    println!("\nSymbolic Evaluation (B=32):");
+    println!("  Total Volume: {:?}", valuation.get_extent(&l2.target().volume_extent()));
 }

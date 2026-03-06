@@ -10,10 +10,9 @@ pub enum ScalarExpr {
     Mod(Box<ScalarExpr>, Box<ScalarExpr>),
     Xor(Box<ScalarExpr>, Box<ScalarExpr>),
     BitShiftRight(Box<ScalarExpr>, u32),
-    BitLinear(Box<ScalarExpr>, Vec<Vec<u8>>), // Bit-matrix multiplication over GF(2)
-    // Logical operations for Domain Predicates
+    BitLinear(Box<ScalarExpr>, Vec<Vec<u8>>),
     And(Box<ScalarExpr>, Box<ScalarExpr>),
-    Lt(Box<ScalarExpr>, Box<ScalarExpr>), // Less than
+    Lt(Box<ScalarExpr>, Box<ScalarExpr>),
     Eq(Box<ScalarExpr>, Box<ScalarExpr>),
 }
 
@@ -91,14 +90,10 @@ impl ScalarExpr {
                     (ScalarExpr::Constant(va), ScalarExpr::Constant(vb)) => {
                         ScalarExpr::Constant(va + vb)
                     }
-                    // Flatten: (x + C1) + C2 -> x + (C1+C2)
                     (ScalarExpr::Add(inner_a, inner_b), ScalarExpr::Constant(c2)) => {
                         if let ScalarExpr::Constant(c1) = &**inner_b {
-                            ScalarExpr::Add(
-                                inner_a.clone(),
-                                Box::new(ScalarExpr::Constant(c1 + c2)),
-                            )
-                            .simplify()
+                            ScalarExpr::Add(inner_a.clone(), Box::new(ScalarExpr::Constant(c1 + c2)))
+                                .simplify()
                         } else {
                             ScalarExpr::Add(Box::new(a), Box::new(b))
                         }
@@ -129,7 +124,6 @@ impl ScalarExpr {
                     (ScalarExpr::Constant(va), ScalarExpr::Constant(vb)) if *vb != 0 => {
                         ScalarExpr::Constant(va / vb)
                     }
-                    // Rule: (x * K + y) / K -> x + y/K
                     (ScalarExpr::Add(l, r), ScalarExpr::Constant(k)) => {
                         match (l.as_ref(), r.as_ref()) {
                             (ScalarExpr::Mul(term, inner_r), rest) => {
@@ -178,7 +172,6 @@ impl ScalarExpr {
                     (ScalarExpr::Constant(va), ScalarExpr::Constant(vb)) if *vb != 0 => {
                         ScalarExpr::Constant(va % vb)
                     }
-                    // Rule: (x * K + y) % K -> y % K
                     (ScalarExpr::Add(l, r), ScalarExpr::Constant(k)) => {
                         match (l.as_ref(), r.as_ref()) {
                             (ScalarExpr::Mul(_, inner_r), rest) => {
@@ -208,7 +201,6 @@ impl ScalarExpr {
                             _ => ScalarExpr::Mod(Box::new(a), Box::new(b)),
                         }
                     }
-                    // Rule: (x * K) % K -> 0
                     (ScalarExpr::Mul(_, inner_r), ScalarExpr::Constant(k)) => {
                         if let ScalarExpr::Constant(coeff) = inner_r.as_ref() {
                             if coeff == k {
@@ -221,6 +213,18 @@ impl ScalarExpr {
                         }
                     }
                     _ => ScalarExpr::Mod(Box::new(a), Box::new(b)),
+                }
+            }
+            ScalarExpr::And(a, b) => {
+                let a = a.simplify();
+                let b = b.simplify();
+                match (&a, &b) {
+                    (ScalarExpr::Constant(0), _) | (_, ScalarExpr::Constant(0)) => {
+                        ScalarExpr::Constant(0)
+                    }
+                    (ScalarExpr::Constant(_), _) => b,
+                    (_, ScalarExpr::Constant(_)) => a,
+                    _ => ScalarExpr::And(Box::new(a), Box::new(b)),
                 }
             }
             ScalarExpr::BitLinear(a, m) => {
@@ -253,7 +257,7 @@ pub fn invert_gf2(matrix: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
             pivot += 1;
         }
         if pivot == n {
-            return None; // Singular matrix
+            return None;
         }
         aug.swap(i, pivot);
         for j in 0..n {
@@ -273,20 +277,11 @@ pub fn invert_gf2(matrix: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
     Some(inv)
 }
 
-/// A partial typed layout `L : A ⇀ B`.
-pub trait Layout {
+pub trait AsLayout {
     fn source(&self) -> Space;
     fn target(&self) -> Space;
-
-    /// Maps a product coordinate in source space to target space.
     fn apply(&self, valuation: &Valuation, input: &[u64]) -> Option<Vec<u64>>;
-
-    /// Returns (Address Expressions, Validity Predicate)
-    fn lower(
-        &self,
-        valuation: &Valuation,
-        inputs: Vec<ScalarExpr>,
-    ) -> (Vec<ScalarExpr>, ScalarExpr);
+    fn lower(&self, valuation: &Valuation, inputs: Vec<ScalarExpr>) -> (Vec<ScalarExpr>, ScalarExpr);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -310,7 +305,7 @@ pub enum Expression {
     Repeat(Space, Space),
 }
 
-impl Layout for Expression {
+impl AsLayout for Expression {
     fn source(&self) -> Space {
         match self {
             Expression::Identity(s)
@@ -601,19 +596,13 @@ impl Layout for Expression {
         }
     }
 
-    fn lower(
-        &self,
-        valuation: &Valuation,
-        inputs: Vec<ScalarExpr>,
-    ) -> (Vec<ScalarExpr>, ScalarExpr) {
+    fn lower(&self, valuation: &Valuation, inputs: Vec<ScalarExpr>) -> (Vec<ScalarExpr>, ScalarExpr) {
         let mut domain = ScalarExpr::Constant(1);
 
-        // 1. Symbolic Rank check
         if inputs.len() != self.source().factors.len() {
             return (vec![], ScalarExpr::Constant(0));
         }
 
-        // 2. Symbolic Bounds check for source space
         for (i, f) in self.source().factors.iter().enumerate() {
             if let Some(extent) = valuation.get_extent(&f.extent) {
                 let in_bounds = ScalarExpr::Lt(
@@ -657,7 +646,6 @@ impl Layout for Expression {
                         ScalarExpr::Div(Box::new(offset), Box::new(ScalarExpr::Constant(extent)))
                             .simplify();
                 }
-                // Delinearize domain: offset must be less than volume
                 if let Some(vol) = valuation.get_extent(&s.volume_extent()) {
                     let in_vol = ScalarExpr::Lt(
                         Box::new(inputs[0].clone()),
@@ -836,7 +824,7 @@ impl Layout for Expression {
                                 Box::new(ScalarExpr::Mul(
                                     Box::new(ScalarExpr::Constant(u64::MAX)),
                                     Box::new(expr),
-                                )), // Simplified -expr
+                                )),
                             )
                             .simplify(),
                         );
@@ -847,6 +835,169 @@ impl Layout for Expression {
                 (output, domain)
             }
         }
+    }
+}
+
+/// A high-level, production-grade Layout object.
+/// Encapsulates an Expression and provides fluent builder methods.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layout {
+    pub expr: Expression,
+}
+
+impl Layout {
+    pub fn new(expr: Expression) -> Self {
+        Self { expr }
+    }
+
+    // --- Constructors ---
+
+    pub fn row_major<S: Into<Space>>(space: S) -> Self {
+        Self::new(Expression::Linearize(space.into()))
+    }
+
+    pub fn col_major<S: Into<Space>>(space: S) -> Self {
+        let space = space.into();
+        let p = (0..space.rank()).rev().collect::<Vec<_>>();
+        let transposed_space = space.permute(&p);
+        Self::new(Expression::Composition(
+            Box::new(Expression::Permute(space, p)),
+            Box::new(Expression::Linearize(transposed_space)),
+        ))
+    }
+
+    pub fn identity<S: Into<Space>>(space: S) -> Self {
+        Self::new(Expression::Identity(space.into()))
+    }
+
+    // --- Fluent Builder Methods (No-Movement Views) ---
+
+    pub fn transpose(self) -> Self {
+        let rank = self.source().rank();
+        if rank < 2 {
+            return self;
+        }
+        let mut p: Vec<usize> = (0..rank).collect();
+        p.swap(rank - 1, rank - 2);
+        self.permute(p)
+    }
+
+    pub fn permute(self, p: Vec<usize>) -> Self {
+        let src = self.source();
+        // New view V: PermutedSrc -> src
+        // We need to construct the space that, when permuted by p, gives src.
+        // Or simpler: Permute(src, p) maps src -> PermutedTarget.
+        // If the user wants to "permute" the current layout, they usually mean
+        // they want the new layout to have a permuted source.
+        let new_src = src.permute(&p); 
+        Self::new(Expression::Composition(
+            Box::new(Expression::Permute(new_src, p)),
+            Box::new(self.expr),
+        ))
+    }
+
+    pub fn reshape<S: Into<Space>>(self, new_src: S) -> Self {
+        let new_src = new_src.into();
+        let current_src = self.source();
+        Self::new(Expression::Composition(
+            Box::new(Expression::Reshape(new_src, current_src)),
+            Box::new(self.expr),
+        ))
+    }
+
+    pub fn split(self, dim_idx: usize, n1: u64) -> Self {
+        // current L: A -> B. We want L': Split(A) -> B.
+        // So L' = L o Join(Split(A))? No.
+        // If we split a dimension in the source, the new source is larger rank.
+        let current_src = self.source();
+        let split_view = Expression::Split(current_src, dim_idx, n1);
+        let new_src = split_view.target();
+        Self::new(Expression::Composition(
+            Box::new(split_view),
+            Box::new(self.expr)
+        ))
+    }
+
+    pub fn join(self, dim_idx: usize) -> Self {
+        let src = self.source();
+        Self::new(Expression::Composition(
+            Box::new(Expression::Join(src, dim_idx)),
+            Box::new(self.expr),
+        ))
+    }
+
+    pub fn swizzle(self, matrix: Vec<Vec<u8>>) -> Self {
+        let tgt = self.target();
+        Self::new(Expression::Composition(
+            Box::new(self.expr),
+            Box::new(Expression::BinaryShadow(tgt, matrix)),
+        ))
+    }
+
+    // --- Algebraic Ops ---
+
+    pub fn compose(self, other: Layout) -> Self {
+        Self::new(Expression::Composition(
+            Box::new(self.expr),
+            Box::new(other.expr),
+        ))
+    }
+
+    pub fn product(self, other: Layout) -> Self {
+        Self::new(Expression::Product(
+            Box::new(self.expr),
+            Box::new(other.expr),
+        ))
+    }
+}
+
+impl Layout {
+    pub fn inverse(&self) -> Option<Self> {
+        self.expr.inverse().map(Self::new)
+    }
+
+    // Forwarding analysis logic (defined in analysis/mod.rs via impl Expression)
+    pub fn is_injective(&self) -> crate::analysis::Judgment {
+        self.expr.is_injective()
+    }
+
+    pub fn is_surjective(&self) -> crate::analysis::Judgment {
+        self.expr.is_surjective()
+    }
+
+    pub fn is_aliasing(&self, valuation: &Valuation) -> crate::analysis::Judgment {
+        self.expr.is_aliasing(valuation)
+    }
+
+    pub fn max_vector_width(&self, valuation: &Valuation) -> u64 {
+        self.expr.max_vector_width(valuation)
+    }
+
+    pub fn equivalent_to(&self, other: &Layout) -> bool {
+        self.expr.equivalent_to(&other.expr)
+    }
+
+    pub fn shuffle_to(&self, target: &Layout) -> Option<Self> {
+        self.expr.shuffle_to(&target.expr).map(Self::new)
+    }
+
+    pub fn bank_conflict_strides(&self, valuation: &Valuation) -> Vec<(usize, u64)> {
+        self.expr.bank_conflict_strides(valuation)
+    }
+}
+
+impl AsLayout for Layout {
+    fn source(&self) -> Space {
+        self.expr.source()
+    }
+    fn target(&self) -> Space {
+        self.expr.target()
+    }
+    fn apply(&self, valuation: &Valuation, input: &[u64]) -> Option<Vec<u64>> {
+        self.expr.apply(valuation, input)
+    }
+    fn lower(&self, valuation: &Valuation, inputs: Vec<ScalarExpr>) -> (Vec<ScalarExpr>, ScalarExpr) {
+        self.expr.lower(valuation, inputs)
     }
 }
 

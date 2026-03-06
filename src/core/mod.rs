@@ -23,6 +23,24 @@ pub enum Extent {
     Remainder(Box<Extent>, Box<Extent>),
 }
 
+impl From<u64> for Extent {
+    fn from(v: u64) -> Self {
+        Extent::Constant(v)
+    }
+}
+
+impl From<&str> for Extent {
+    fn from(s: &str) -> Self {
+        Extent::Variable(s.to_string())
+    }
+}
+
+impl From<String> for Extent {
+    fn from(s: String) -> Self {
+        Extent::Variable(s)
+    }
+}
+
 impl Extent {
     pub fn try_eval(&self, variables: &HashMap<String, u64>) -> Option<u64> {
         match self {
@@ -38,12 +56,20 @@ impl Extent {
             Extent::Quotient(a, b) => {
                 let va = a.try_eval(variables)?;
                 let vb = b.try_eval(variables)?;
-                if vb == 0 { None } else { Some(va / vb) }
+                if vb == 0 {
+                    None
+                } else {
+                    Some(va / vb)
+                }
             }
             Extent::Remainder(a, b) => {
                 let va = a.try_eval(variables)?;
                 let vb = b.try_eval(variables)?;
-                if vb == 0 { None } else { Some(va % vb) }
+                if vb == 0 {
+                    None
+                } else {
+                    Some(va % vb)
+                }
             }
         }
     }
@@ -109,6 +135,28 @@ pub struct Space {
 impl Space {
     pub fn new(factors: Vec<Factor>) -> Self {
         Self { factors }
+    }
+
+    /// Creates a space from a list of extents (constants or variables).
+    pub fn from_extents<I, E>(extents: I) -> Self
+    where
+        I: IntoIterator<Item = E>,
+        E: Into<Extent>,
+    {
+        Self::logical(extents)
+    }
+
+    /// Ergonomic constructor for a simple logical space from a list of extents.
+    pub fn logical<I, E>(extents: I) -> Self
+    where
+        I: IntoIterator<Item = E>,
+        E: Into<Extent>,
+    {
+        let factors = extents
+            .into_iter()
+            .map(|e| Factor::new(Kind::Logical, e.into(), None))
+            .collect();
+        Self::new(factors)
     }
 
     pub fn rank(&self) -> usize {
@@ -186,6 +234,52 @@ impl Space {
             return None;
         }
         Some(output)
+    }
+}
+
+impl<E: Into<Extent>> From<Vec<E>> for Space {
+    fn from(extents: Vec<E>) -> Self {
+        Self::logical(extents)
+    }
+}
+
+impl<E: Into<Extent> + Clone, const N: usize> From<[E; N]> for Space {
+    fn from(extents: [E; N]) -> Self {
+        Self::logical(extents.to_vec())
+    }
+}
+
+impl<E: Into<Extent> + Clone> From<&[E]> for Space {
+    fn from(extents: &[E]) -> Self {
+        Self::logical(extents.to_vec())
+    }
+}
+
+impl From<u64> for Space {
+    fn from(extent: u64) -> Self {
+        Self::logical(vec![Extent::Constant(extent)])
+    }
+}
+
+// Tuple implementations for ergonomics
+impl<E1, E2> From<(E1, E2)> for Space
+where
+    E1: Into<Extent>,
+    E2: Into<Extent>,
+{
+    fn from(t: (E1, E2)) -> Self {
+        Self::logical(vec![t.0.into(), t.1.into()])
+    }
+}
+
+impl<E1, E2, E3> From<(E1, E2, E3)> for Space
+where
+    E1: Into<Extent>,
+    E2: Into<Extent>,
+    E3: Into<Extent>,
+{
+    fn from(t: (E1, E2, E3)) -> Self {
+        Self::logical(vec![t.0.into(), t.1.into(), t.2.into()])
     }
 }
 
